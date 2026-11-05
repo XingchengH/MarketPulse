@@ -13,7 +13,6 @@ export const alertStatusSchema = z.enum(['open', 'recovered', 'acknowledged']);
 const ruleScopeSchema = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('all') }),
   z.object({ kind: z.literal('symbol'), symbol: z.string().regex(/^[A-Z][A-Z0-9.-]*$/) }),
-  z.object({ kind: z.literal('provider'), provider: z.string().min(1) }),
 ]);
 
 export const ruleInputSchema = z.object({

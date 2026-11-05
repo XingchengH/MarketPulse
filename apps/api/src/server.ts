@@ -44,7 +44,7 @@ const marketData = {
   symbol: async (symbol: string) => subscribedSymbols.includes(symbol) ? aggregator.snapshotWithMarketState(symbol) : null,
   metrics: async ({ symbol, from, to }: { symbol: string; from: Date; to: Date }) => MetricBucket.find({ symbol, bucketStart: { $gte: from, $lte: to } }).sort({ bucketStart: 1 }).lean(),
 };
-const server = createApp({ config, database, auth: { provider, repository: new MongooseAuthRepository() }, marketData }).listen(config.port, () => {
+const server = createApp({ config, database, auth: { provider, repository: new MongooseAuthRepository() }, marketData, monitoring: {} }).listen(config.port, () => {
   console.log(`API listening on port ${config.port}`);
 });
 
