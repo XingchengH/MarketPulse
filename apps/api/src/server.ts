@@ -7,7 +7,8 @@ import { MongooseAuthRepository } from './auth/mongoose-repository.js';
 import { AlpacaProvider } from './market-data/alpaca-provider.js';
 import { MarketDataAggregator } from './market-data/aggregator.js';
 import { MetricBucket, upsertMinuteBucket } from './models/metric-bucket.js';
-import { Watchlist } from './models/watchlist.js';
+import { bootstrapDefaultWatchlist, Watchlist } from './models/watchlist.js';
+import { MinuteMetricWriter } from './market-data/minute-writer.js';
 
 const config = loadConfig();
 const database = connectDatabase(config.mongodbUri);
@@ -17,20 +18,21 @@ const provider = createGoogleIdentityProvider(config.google.clientId, config.goo
 const marketProvider = new AlpacaProvider({ apiKey: config.alpaca.apiKey, apiSecret: config.alpaca.apiSecret });
 const aggregator = new MarketDataAggregator({ marketClock: { get: () => marketProvider.getMarketClock() } });
 let subscribedSymbols: string[] = [];
+const minuteWriter = new MinuteMetricWriter(upsertMinuteBucket, { onFailure: () => aggregator.recordProviderError(subscribedSymbols) });
+minuteWriter.start();
 marketProvider.onEvent(event => {
   aggregator.ingest(event);
-  const snapshot = aggregator.snapshot(event.symbol);
-  const bucketStart = new Date(Math.floor(Date.parse(event.receivedAt) / 60_000) * 60_000);
-  void upsertMinuteBucket({ symbol: event.symbol, bucketStart, messageCount: snapshot.receivedMessagesPerSecond, latencyLatest: snapshot.observedLatency.latest, latencyP95: snapshot.observedLatency.p95, latestTrade: snapshot.latestTrade, latestQuote: snapshot.latestQuote, spread: snapshot.spread, providerErrors: snapshot.providerErrors, reconnects: snapshot.reconnects }).catch(() => undefined);
+  minuteWriter.ingest(event);
 });
 marketProvider.onOperationalEvent(event => {
-  if (event.type === 'error') aggregator.recordProviderError(subscribedSymbols);
-  if (event.type === 'reconnect') aggregator.recordReconnect(subscribedSymbols);
+  if (event.type === 'error') { aggregator.recordProviderError(subscribedSymbols); minuteWriter.record('providerErrors', subscribedSymbols); }
+  if (event.type === 'reconnect') { aggregator.recordReconnect(subscribedSymbols); minuteWriter.record('reconnects', subscribedSymbols); }
 });
 const configured = Boolean(config.alpaca.apiKey && config.alpaca.apiSecret);
+await bootstrapDefaultWatchlist();
+const symbols = (await Watchlist.find({ enabled: true }).select('symbol').lean()) as Array<{ symbol: string }>;
+subscribedSymbols = symbols.map(item => item.symbol);
 if (configured) {
-  const symbols = (await Watchlist.find({ enabled: true }).select('symbol').lean()) as Array<{ symbol: string }>;
-  subscribedSymbols = symbols.map(item => item.symbol);
   await marketProvider.connect(subscribedSymbols);
 }
 const marketData = {
@@ -45,5 +47,5 @@ const server = createApp({ config, database, auth: { provider, repository: new M
 
 const shutdown = createGracefulShutdown({ server, database });
 
-process.once('SIGINT', () => void marketProvider.disconnect().then(() => shutdown('SIGINT')));
-process.once('SIGTERM', () => void marketProvider.disconnect().then(() => shutdown('SIGTERM')));
+process.once('SIGINT', () => void Promise.all([marketProvider.disconnect(), minuteWriter.stop()]).then(() => shutdown('SIGINT')));
+process.once('SIGTERM', () => void Promise.all([marketProvider.disconnect(), minuteWriter.stop()]).then(() => shutdown('SIGTERM')));

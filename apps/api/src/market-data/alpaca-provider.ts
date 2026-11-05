@@ -13,12 +13,14 @@ export interface AlpacaProviderOptions {
   socketFactory?: (url: string) => SocketLike;
   fetch?: typeof fetch;
   setTimeout?: (callback: () => void, delay: number) => unknown;
+  clearTimeout?: (timer: unknown) => void;
 }
 
 export class AlpacaProvider implements MarketDataProvider {
   readonly name = 'alpaca' as const;
   private providerState: ProviderState = 'unconfigured';
   private socket?: SocketLike; private desiredSymbols: string[] = []; private activeSymbols: string[] = []; private stopped = false;
+  private generation = 0; private reconnectTimer?: unknown;
   private readonly events = new Set<(event: MarketEvent) => void>(); private readonly operational = new Set<(event: OperationalEvent) => void>();
   private readonly backoff = new ReconnectBackoff();
   private readonly clock: MarketClockCache;
@@ -35,13 +37,14 @@ export class AlpacaProvider implements MarketDataProvider {
   async connect(symbols: string[]): Promise<void> {
     this.desiredSymbols = [...new Set(symbols.map(value => value.toUpperCase()))];
     if (!this.options.apiKey || !this.options.apiSecret) { this.transition('unconfigured'); return; }
-    this.stopped = false; this.transition(this.socket ? 'reconnecting' : 'connecting');
+    this.stopped = false; this.cancelReconnect(); const generation = ++this.generation; this.transition(this.socket ? 'reconnecting' : 'connecting');
     const socketFactory = this.options.socketFactory ?? ((url: string) => new WebSocket(url) as unknown as SocketLike);
     const socket = socketFactory('wss://stream.data.alpaca.markets/v2/iex'); this.socket = socket;
-    socket.addEventListener('open', () => socket.send(JSON.stringify({ action: 'auth', key: this.options.apiKey, secret: this.options.apiSecret })));
-    socket.addEventListener('message', event => this.handleMessage(event.data));
-    socket.addEventListener('error', () => { for (const listener of this.operational) listener({ type: 'error', message: 'Alpaca stream error' }); });
-    socket.addEventListener('close', () => { this.backoff.disconnected(); this.socket = undefined; if (!this.stopped) this.scheduleReconnect(); });
+    const current = () => generation === this.generation && socket === this.socket;
+    socket.addEventListener('open', () => { if (current()) socket.send(JSON.stringify({ action: 'auth', key: this.options.apiKey, secret: this.options.apiSecret })); });
+    socket.addEventListener('message', event => { if (current()) this.handleMessage(event.data); });
+    socket.addEventListener('error', () => { if (current()) for (const listener of this.operational) listener({ type: 'error', message: 'Alpaca stream error' }); });
+    socket.addEventListener('close', () => { if (!current()) return; this.backoff.disconnected(); this.socket = undefined; if (!this.stopped) this.scheduleReconnect(); });
   }
   private handleMessage(raw: unknown) {
     try {
@@ -56,12 +59,13 @@ export class AlpacaProvider implements MarketDataProvider {
           this.transition('connected');
           continue;
         }
-        if (message.T === 'error') { const code = Number(message.code); this.transition(code === 429 ? 'rate_limited' : 'unavailable'); for (const listener of this.operational) listener({ type: 'error', message: `Alpaca stream rejected request (${code || 'unknown'})` }); continue; }
+        if (message.T === 'error') { const code = Number(message.code); this.transition(code === 429 || code === 407 ? 'rate_limited' : 'unavailable'); for (const listener of this.operational) listener({ type: 'error', message: `Alpaca stream rejected request (${code || 'unknown'})` }); this.socket?.close(); continue; }
         const event = normalizeAlpacaMessage(message); if (event) for (const listener of this.events) listener(event);
       }
     } catch { for (const listener of this.operational) listener({ type: 'error', message: 'Invalid Alpaca stream message' }); }
   }
-  private scheduleReconnect() { this.transition('reconnecting'); for (const listener of this.operational) listener({ type: 'reconnect' }); (this.options.setTimeout ?? setTimeout)(() => void this.connect(this.desiredSymbols), this.backoff.nextDelay()); }
+  private cancelReconnect() { if (this.reconnectTimer !== undefined) (this.options.clearTimeout ?? clearTimeout)(this.reconnectTimer as ReturnType<typeof setTimeout>); this.reconnectTimer = undefined; }
+  private scheduleReconnect() { this.cancelReconnect(); this.transition('reconnecting'); for (const listener of this.operational) listener({ type: 'reconnect' }); this.reconnectTimer = (this.options.setTimeout ?? setTimeout)(() => { this.reconnectTimer = undefined; if (!this.stopped) void this.connect(this.desiredSymbols); }, this.backoff.nextDelay()); }
   private sendSubscriptions() { if (this.socket) { this.socket.send(JSON.stringify({ action: 'subscribe', trades: this.desiredSymbols, quotes: this.desiredSymbols })); this.activeSymbols = [...this.desiredSymbols]; } }
   async replaceSubscriptions(symbols: string[]): Promise<void> {
     const previous = this.activeSymbols; this.desiredSymbols = [...new Set(symbols.map(value => value.toUpperCase()))];
@@ -70,7 +74,7 @@ export class AlpacaProvider implements MarketDataProvider {
       this.sendSubscriptions();
     }
   }
-  async disconnect(): Promise<void> { this.stopped = true; this.socket?.close(); this.socket = undefined; this.transition(this.options.apiKey && this.options.apiSecret ? 'unavailable' : 'unconfigured'); }
+  async disconnect(): Promise<void> { this.stopped = true; this.cancelReconnect(); this.generation += 1; const socket = this.socket; this.socket = undefined; socket?.close(); this.transition(this.options.apiKey && this.options.apiSecret ? 'unavailable' : 'unconfigured'); }
   onEvent(listener: (event: MarketEvent) => void) { this.events.add(listener); return () => this.events.delete(listener); }
   onOperationalEvent(listener: (event: OperationalEvent) => void) { this.operational.add(listener); return () => this.operational.delete(listener); }
   async getMarketClock(): Promise<MarketClock> { const clock = await this.clock.get(); if (!clock.isOpen) this.transition('market_closed'); else if (this.providerState === 'market_closed') this.transition('connected'); return clock; }

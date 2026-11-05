@@ -4,6 +4,8 @@ import { MarketDataAggregator } from './aggregator.js';
 import { MarketClockCache } from './market-clock.js';
 import { ReconnectBackoff } from './reconnect.js';
 import { AlpacaProvider } from './alpaca-provider.js';
+import { MinuteMetricWriter } from './minute-writer.js';
+import { bootstrapDefaultWatchlist, DEFAULT_WATCHLIST } from '../models/watchlist.js';
 
 describe('Alpaca market data', () => {
   it('normalizes a trade exactly', () => {
@@ -52,6 +54,16 @@ describe('Alpaca market data', () => {
     now = 30_000; await clock.get(); expect(fetchClock).toHaveBeenCalledTimes(2);
   });
 
+  it('single-flights concurrent clock cache misses', async () => {
+    let resolve!: (value: { isOpen: boolean; nextOpen: string; nextClose: string }) => void;
+    const fetchClock = vi.fn(() => new Promise<{ isOpen: boolean; nextOpen: string; nextClose: string }>(done => { resolve = done; }));
+    const clock = new MarketClockCache(fetchClock, { timeoutMs: 1_000 });
+    const first = clock.get(); const second = clock.get();
+    expect(fetchClock).toHaveBeenCalledTimes(1);
+    resolve({ isOpen: true, nextOpen: 'a', nextClose: 'b' });
+    await expect(Promise.all([first, second])).resolves.toHaveLength(2);
+  });
+
   it('handles Alpaca status and subscription control acknowledgements', async () => {
     const sent: string[] = [];
     const listeners = new Map<string, (event: { data?: unknown }) => void>();
@@ -75,5 +87,35 @@ describe('Alpaca market data', () => {
       { action: 'unsubscribe', trades: ['AAPL'], quotes: ['AAPL'] },
       { action: 'subscribe', trades: ['MSFT'], quotes: ['MSFT'] },
     ]);
+    listeners.get('message')?.({ data: JSON.stringify([{ T: 'error', code: 407, msg: 'slow client' }]) });
+    expect(provider.state()).toBe('rate_limited');
+  });
+
+  it('cancels reconnect and ignores obsolete socket events on shutdown', async () => {
+    const listeners = new Map<string, (event: { data?: unknown }) => void>(); let timer: unknown; const clear = vi.fn(); const events = vi.fn();
+    const socket = { send: vi.fn(), close: vi.fn(), addEventListener: (type: 'open' | 'close' | 'message' | 'error', listener: (event: { data?: unknown }) => void) => { listeners.set(type, listener); } };
+    const provider = new AlpacaProvider({ apiKey: 'key', apiSecret: 'secret', socketFactory: () => socket, setTimeout: callback => { timer = callback; return 1; }, clearTimeout: clear });
+    provider.onEvent(events); await provider.connect(['AAPL']); listeners.get('close')?.({});
+    expect(provider.state()).toBe('reconnecting'); await provider.disconnect();
+    expect(clear).toHaveBeenCalledWith(1); (timer as (() => void))();
+    listeners.get('message')?.({ data: JSON.stringify([{ T: 't', S: 'AAPL', p: 1, s: 1, t: '2026-11-05T17:00:00Z' }]) });
+    expect(events).not.toHaveBeenCalled(); expect(socket.close).not.toHaveBeenCalled();
+  });
+
+  it('rotates and serializes minute metrics with retries', async () => {
+    const written: unknown[] = []; const write = vi.fn(async value => { written.push(value); });
+    const writer = new MinuteMetricWriter(write, { now: () => Date.parse('2026-11-05T17:01:00Z') });
+    writer.ingest(normalizeAlpacaMessage({ T: 't', S: 'AAPL', p: 1, s: 1, t: '2026-11-05T17:00:00Z' }, new Date('2026-11-05T17:00:00.040Z'))!);
+    writer.ingest(normalizeAlpacaMessage({ T: 'q', S: 'AAPL', bp: 1, ap: 2, t: '2026-11-05T17:00:10Z' }, new Date('2026-11-05T17:00:10.020Z'))!);
+    await writer.flushCompleted();
+    expect(written).toEqual([expect.objectContaining({ symbol: 'AAPL', messageCount: 2, receivedMessagesPerSecond: 2 / 60, latencyLatest: 20, latencyP95: 40, spread: 1, staleDurationMs: 49_980 })]);
+  });
+
+  it('bootstraps defaults only for an empty watchlist', async () => {
+    const empty = { countDocuments: vi.fn(async () => 0), insertMany: vi.fn(async () => []) };
+    await bootstrapDefaultWatchlist(empty as never);
+    expect(empty.insertMany).toHaveBeenCalledWith(DEFAULT_WATCHLIST.map(symbol => ({ symbol, enabled: true })), { ordered: false });
+    const existing = { countDocuments: vi.fn(async () => 1), insertMany: vi.fn() };
+    await bootstrapDefaultWatchlist(existing as never); expect(existing.insertMany).not.toHaveBeenCalled();
   });
 });
