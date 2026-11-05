@@ -15,7 +15,7 @@ export class MongooseAuthRepository implements AuthRepository, AdminUserReposito
     const user = await User.findOneAndUpdate(
       { googleSubject: profile.subject },
       { $set: { email: profile.email, name: profile.name, picture: profile.picture }, $setOnInsert: { googleSubject: profile.subject, role: 'viewer' } },
-      { upsert: true, new: true, runValidators: true },
+      { upsert: true, returnDocument: 'after', runValidators: true },
     ).lean();
     return publicUser(user as never);
   }
@@ -59,7 +59,7 @@ export class MongooseAuthRepository implements AuthRepository, AdminUserReposito
       if (current.role === 'admin' && role !== 'admin' && await User.countDocuments({ role: 'admin' }).session(session) <= 1) {
         return { status: 'final_admin' as const };
       }
-      const user = await User.findByIdAndUpdate(id, { $set: { role } }, { new: true, runValidators: true, session }).lean();
+      const user = await User.findByIdAndUpdate(id, { $set: { role } }, { returnDocument: 'after', runValidators: true, session }).lean();
       return { status: 'updated' as const, user: publicUser(user as never) };
     });
   }

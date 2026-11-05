@@ -77,7 +77,7 @@ describe('authentication', () => {
     const callback = await agent.get(`/api/auth/google/callback?code=ok&state=${state}`);
 
     expect(callback.status).toBe(302);
-    expect(callback.headers.location).toBe('/');
+    expect(callback.headers.location).toBe('http://localhost:5173/');
     expect(repository.user).toMatchObject({ email: 'viewer@example.com', role: 'viewer' });
     expect(JSON.stringify(callback.body)).not.toContain('token');
     const me = await agent.get('/api/auth/me');

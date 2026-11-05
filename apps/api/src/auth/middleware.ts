@@ -15,9 +15,14 @@ export const requireUser = (tokens: TokenService): RequestHandler => async (requ
   }
 };
 
-export const requireRole = (role: Role): RequestHandler => (_request, response, next) => {
+export type CurrentRoleResolver = (userId: string) => Promise<Role | null>;
+
+export const requireRole = (role: Role, resolveCurrentRole?: CurrentRoleResolver): RequestHandler => async (_request, response, next) => {
   const user = response.locals.user as { role?: Role } | undefined;
   if (!user?.role) return response.status(401).json({ error: { code: 'UNAUTHENTICATED', message: 'Authentication required' } });
-  if (!hasRole(user.role, role)) return response.status(403).json({ error: { code: 'FORBIDDEN', message: 'Insufficient role' } });
+  const currentRole = resolveCurrentRole
+    ? await resolveCurrentRole((response.locals.user as { sub: string }).sub)
+    : user.role;
+  if (!currentRole || !hasRole(currentRole, role)) return response.status(403).json({ error: { code: 'FORBIDDEN', message: 'Insufficient role' } });
   next();
 };

@@ -32,6 +32,7 @@ describe('RBAC', () => {
   it('enforces the complete role matrix for admin list and role changes', async () => {
     const repository: AdminUserRepository = {
       listUsers: async () => [],
+      findUserById: async (id) => ({ id, email: `${id}@example.com`, name: id, role: id.startsWith('admin') ? 'admin' : 'viewer' }),
       setRoleSafely: async () => ({ status: 'updated', user: { id: 'target', email: 't@example.com', name: 'T', role: 'operator' } }),
     };
     for (const [role, expected] of [['viewer', 403], ['operator', 403], ['admin', 200]] as const) {
@@ -47,6 +48,7 @@ describe('RBAC', () => {
   it('prevents demoting the final admin', async () => {
     const repository: AdminUserRepository = {
       listUsers: async () => [],
+      findUserById: async (id) => ({ id, email: `${id}@example.com`, name: id, role: 'admin' }),
       setRoleSafely: async () => ({ status: 'final_admin' }),
     };
     const response = await request(appFor('admin', repository)).patch('/api/admin/users/admin-1/role').set('Cookie', await cookie('admin')).send({ role: 'viewer' });
@@ -57,6 +59,10 @@ describe('RBAC', () => {
     const roles = new Map([['admin-1', 'admin' as Role], ['admin-2', 'admin' as Role]]);
     const repository: AdminUserRepository = {
       listUsers: async () => [],
+      findUserById: async (id) => {
+        const role = roles.get(id);
+        return role ? { id, email: `${id}@example.com`, name: id, role } : null;
+      },
       async setRoleSafely(id, role) {
         const current = roles.get(id);
         if (!current) return { status: 'not_found' };
@@ -70,7 +76,27 @@ describe('RBAC', () => {
       request(app).patch('/api/admin/users/admin-1/role').set('Cookie', await cookie('admin')).send({ role: 'viewer' }),
       request(app).patch('/api/admin/users/admin-2/role').set('Cookie', await cookie('admin')).send({ role: 'viewer' }),
     ]);
-    expect(responses.map((response) => response.status).sort()).toEqual([200, 409]);
+    // The second request can be denied at fresh-role authorization before it reaches the invariant.
+    expect(responses.map((response) => response.status).sort()).toEqual([200, 403]);
     expect([...roles.values()].filter((role) => role === 'admin')).toHaveLength(1);
+  });
+
+  it('removes privileged access immediately after demotion and denies self-repromotion', async () => {
+    let currentRole: Role = 'admin';
+    const repository: AdminUserRepository = {
+      listUsers: async () => [],
+      findUserById: async (id) => ({ id, email: `${id}@example.com`, name: id, role: currentRole }),
+      setRoleSafely: async (id, role) => {
+        currentRole = role;
+        return { status: 'updated', user: { id, email: `${id}@example.com`, name: id, role } };
+      },
+    };
+    const staleAdminCookie = await cookie('admin');
+    const app = appFor('admin', repository);
+    expect((await request(app).get('/api/admin/users').set('Cookie', staleAdminCookie)).status).toBe(200);
+    currentRole = 'viewer';
+    expect((await request(app).get('/api/admin/users').set('Cookie', staleAdminCookie)).status).toBe(403);
+    expect((await request(app).patch('/api/admin/users/admin-1/role').set('Cookie', staleAdminCookie).send({ role: 'admin' })).status).toBe(403);
+    expect(currentRole).toBe('viewer');
   });
 });

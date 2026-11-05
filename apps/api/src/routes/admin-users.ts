@@ -5,6 +5,7 @@ import { requireRole } from '../auth/middleware.js';
 
 export interface AdminUserRepository {
   listUsers(): Promise<PublicUser[]>;
+  findUserById(id: string): Promise<PublicUser | null>;
   setRoleSafely(id: string, role: Role): Promise<
     { status: 'updated'; user: PublicUser } | { status: 'not_found' } | { status: 'final_admin' }
   >;
@@ -12,7 +13,7 @@ export interface AdminUserRepository {
 
 export function createAdminUsersRouter(repository: AdminUserRepository): Router {
   const router = Router();
-  router.use(requireRole('admin'));
+  router.use(requireRole('admin', async (id) => (await repository.findUserById(id))?.role ?? null));
   router.get('/', async (_request, response) => response.json({ users: await repository.listUsers() }));
   router.patch('/:id/role', async (request, response) => {
     const parsed = roleSchema.safeParse(request.body?.role);

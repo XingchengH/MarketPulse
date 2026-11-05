@@ -12,6 +12,18 @@ export interface GoogleIdentityProvider {
   exchange(code: string): Promise<GoogleProfile>;
 }
 
+export function parseGoogleProfile(value: unknown): GoogleProfile {
+  const profile = value as { sub?: unknown; email?: unknown; email_verified?: unknown; name?: unknown; picture?: unknown };
+  if (
+    typeof profile.sub !== 'string'
+    || typeof profile.email !== 'string'
+    || profile.email_verified !== true
+    || typeof profile.name !== 'string'
+    || (profile.picture !== undefined && typeof profile.picture !== 'string')
+  ) throw new Error('Google profile is incomplete or email is unverified');
+  return { subject: profile.sub, email: profile.email, name: profile.name, picture: profile.picture };
+}
+
 export function createGoogleIdentityProvider(clientId: string, clientSecret: string, redirectUri: string): GoogleIdentityProvider {
   const client = new OAuth2Client(clientId, clientSecret, redirectUri);
   return {
@@ -28,9 +40,7 @@ export function createGoogleIdentityProvider(clientId: string, clientSecret: str
         headers: { authorization: `Bearer ${tokens.accessToken()}` },
       });
       if (!response.ok) throw new Error('Google userinfo request failed');
-      const value = await response.json() as { sub?: string; email?: string; name?: string; picture?: string };
-      if (!value.sub || !value.email || !value.name) throw new Error('Google profile is incomplete');
-      return { subject: value.sub, email: value.email, name: value.name, picture: value.picture };
+      return parseGoogleProfile(await response.json());
     },
   };
 }

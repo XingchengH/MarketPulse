@@ -28,7 +28,7 @@ const safeEqual = (left: string, right: string) => {
   return a.length === b.length && timingSafeEqual(a, b);
 };
 
-export function createAuthRouter({ provider, repository, tokens, nodeEnv }: Dependencies): Router {
+export function createAuthRouter({ provider, repository, tokens, nodeEnv, webOrigin }: Dependencies): Router {
   const router = Router();
   const production = nodeEnv === 'production';
 
@@ -50,7 +50,7 @@ export function createAuthRouter({ provider, repository, tokens, nodeEnv }: Depe
     const refresh = tokens.newRefreshToken();
     await repository.saveRefresh({ tokenHash: refresh.hash, userId: user.id, familyId: refresh.familyId, expiresAt: refreshExpiry(), purgeAt: refreshPurge() });
     setAuthCookies(response, access, refresh.value, production);
-    response.redirect('/');
+    response.redirect(new URL('/', webOrigin).toString());
   });
 
   router.get('/me', requireUser(tokens), async (_request, response) => {
