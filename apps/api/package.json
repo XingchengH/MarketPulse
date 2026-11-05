@@ -4,14 +4,25 @@
   "version": "0.1.0",
   "type": "module",
   "scripts": {
-    "dev": "node --watch src/index.ts",
+    "dev": "node --watch src/server.ts",
     "build": "tsc -p tsconfig.json",
+    "test": "vitest run --config vitest.config.ts",
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
-    "@marketpulse/contracts": "workspace:*"
+    "@marketpulse/contracts": "workspace:*",
+    "cors": "^2.8.5",
+    "express": "^5.1.0",
+    "helmet": "^8.1.0",
+    "mongodb": "^7.0.0",
+    "zod": "^4.1.12"
   },
   "devDependencies": {
-    "typescript": "~5.8.3"
+    "@types/cors": "^2.8.19",
+    "@types/express": "^5.0.5",
+    "@types/node": "^24.10.0",
+    "supertest": "^7.1.4",
+    "typescript": "~5.8.3",
+    "vitest": "^3.2.4"
   }
 }
