@@ -60,4 +60,14 @@ describe('monitoring Mongo transaction and index invariants', () => {
     create.mockRestore();
     expect((await Alert.findById(alert._id).lean())?.status).toBe('open');
   });
+
+  it.each(['open', 'recovered'] as const)('atomically acknowledges a %s alert and appends its audit event', async status => {
+    const alert = await Alert.create({ ruleId: new mongoose.Types.ObjectId().toString(), ruleVersion: 1, symbol: 'AAPL', metric: 'observedLatencyMs', severity: 'critical', status, value: 120, threshold: 100, openedAt: new Date(10), lastObservedAt: new Date(20), ...(status === 'recovered' ? { recoveredAt: new Date(30) } : {}) });
+    const acknowledgedAt = new Date('2026-11-05T20:00:00.000Z');
+    await new AlertService().acknowledge(String(alert._id), 'operator-1', 'request-ack', acknowledgedAt);
+    const persisted = await Alert.findById(alert._id).lean();
+    expect(persisted).toMatchObject({ status: 'acknowledged', acknowledgedBy: 'operator-1', acknowledgedAt });
+    const audit = await AuditEvent.findOne({ resourceId: String(alert._id) }).lean();
+    expect(audit).toMatchObject({ actorId: 'operator-1', requestId: 'request-ack', resourceType: 'alert', resourceId: String(alert._id), action: 'alert.acknowledge' });
+  });
 });
