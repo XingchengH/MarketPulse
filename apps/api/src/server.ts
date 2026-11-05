@@ -18,7 +18,10 @@ const provider = createGoogleIdentityProvider(config.google.clientId, config.goo
 const marketProvider = new AlpacaProvider({ apiKey: config.alpaca.apiKey, apiSecret: config.alpaca.apiSecret });
 const aggregator = new MarketDataAggregator({ marketClock: { get: () => marketProvider.getMarketClock() } });
 let subscribedSymbols: string[] = [];
-const minuteWriter = new MinuteMetricWriter(upsertMinuteBucket, { onFailure: () => aggregator.recordProviderError(subscribedSymbols) });
+const minuteWriter = new MinuteMetricWriter(upsertMinuteBucket, { onFailure: error => {
+  aggregator.recordProviderError(subscribedSymbols);
+  console.error({ component: 'minute-metric-writer', message: error.message }, 'Market metric persistence failure');
+} });
 minuteWriter.start();
 marketProvider.onEvent(event => {
   aggregator.ingest(event);

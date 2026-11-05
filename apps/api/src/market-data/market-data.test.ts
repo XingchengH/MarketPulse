@@ -67,11 +67,12 @@ describe('Alpaca market data', () => {
   it('handles Alpaca status and subscription control acknowledgements', async () => {
     const sent: string[] = [];
     const listeners = new Map<string, (event: { data?: unknown }) => void>();
+    let reconnect: (() => void) | undefined;
     const socket = {
-      send: (value: string) => sent.push(value), close: () => undefined,
+      send: (value: string) => sent.push(value), close: vi.fn(() => listeners.get('close')?.({})),
       addEventListener: (type: 'open' | 'close' | 'message' | 'error', listener: (event: { data?: unknown }) => void) => { listeners.set(type, listener); },
     };
-    const provider = new AlpacaProvider({ apiKey: 'key', apiSecret: 'secret', socketFactory: () => socket });
+    const provider = new AlpacaProvider({ apiKey: 'key', apiSecret: 'secret', socketFactory: () => socket, setTimeout: callback => { reconnect = callback; return 1; }, clearTimeout: vi.fn() });
     await provider.connect(['AAPL']);
     expect(provider.state()).toBe('connecting');
     listeners.get('open')?.({});
@@ -88,7 +89,8 @@ describe('Alpaca market data', () => {
       { action: 'subscribe', trades: ['MSFT'], quotes: ['MSFT'] },
     ]);
     listeners.get('message')?.({ data: JSON.stringify([{ T: 'error', code: 407, msg: 'slow client' }]) });
-    expect(provider.state()).toBe('rate_limited');
+    expect(socket.close).toHaveBeenCalledOnce(); expect(provider.state()).toBe('reconnecting'); expect(reconnect).toBeTypeOf('function');
+    await provider.disconnect();
   });
 
   it('cancels reconnect and ignores obsolete socket events on shutdown', async () => {
@@ -109,6 +111,22 @@ describe('Alpaca market data', () => {
     writer.ingest(normalizeAlpacaMessage({ T: 'q', S: 'AAPL', bp: 1, ap: 2, t: '2026-11-05T17:00:10Z' }, new Date('2026-11-05T17:00:10.020Z'))!);
     await writer.flushCompleted();
     expect(written).toEqual([expect.objectContaining({ symbol: 'AAPL', messageCount: 2, receivedMessagesPerSecond: 2 / 60, latencyLatest: 20, latencyP95: 40, spread: 1, staleDurationMs: 49_980 })]);
+  });
+
+  it('bounds high-volume latency samples', () => {
+    const writer = new MinuteMetricWriter(async () => undefined, { latencyCapacity: 64 });
+    const event = normalizeAlpacaMessage({ T: 't', S: 'AAPL', p: 1, s: 1, t: '2026-11-05T17:00:00Z' }, new Date('2026-11-05T17:00:00.040Z'))!;
+    for (let index = 0; index < 10_000; index += 1) writer.ingest(event);
+    expect(writer.latencySampleCount('AAPL', Date.parse('2026-11-05T17:00:00Z'))).toBe(64);
+  });
+
+  it('retains an exhausted bucket and recovers on the next flush', async () => {
+    let attempts = 0; const failures = vi.fn(); const sleep = vi.fn(async () => undefined);
+    const writer = new MinuteMetricWriter(async () => { attempts += 1; if (attempts <= 2) throw new Error('database detail'); }, { now: () => Date.parse('2026-11-05T17:01:00Z'), retries: 1, sleep, onFailure: failures });
+    writer.ingest(normalizeAlpacaMessage({ T: 't', S: 'AAPL', p: 1, s: 1, t: '2026-11-05T17:00:00Z' }, new Date('2026-11-05T17:00:00.040Z'))!);
+    await writer.flushCompleted();
+    expect(attempts).toBe(2); expect(sleep).toHaveBeenCalledWith(50); expect(failures).toHaveBeenCalledWith(expect.objectContaining({ message: 'Minute metric persistence failed' }));
+    await writer.flushCompleted(); expect(attempts).toBe(3);
   });
 
   it('bootstraps defaults only for an empty watchlist', async () => {
