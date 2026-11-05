@@ -12,6 +12,7 @@ import { createAdminUsersRouter, type AdminUserRepository } from './routes/admin
 import type { GoogleIdentityProvider } from './auth/google-provider.js';
 import { createTokenService, type TokenService } from './auth/tokens.js';
 import { requireUser } from './auth/middleware.js';
+import { createMarketDataRouter, type MarketDataApi } from './routes/market-data.js';
 
 export interface AppDependencies {
   config: AppConfig;
@@ -22,6 +23,7 @@ export interface AppDependencies {
     repository: AuthRepository & AdminUserRepository;
     tokens?: TokenService;
   };
+  marketData?: MarketDataApi;
 }
 
 export function createApp(dependencies: AppDependencies): Express {
@@ -43,6 +45,7 @@ export function createApp(dependencies: AppDependencies): Express {
       webOrigin: dependencies.config.webOrigin,
     }));
     app.use('/api/admin/users', requireUser(tokens), createAdminUsersRouter(dependencies.auth.repository));
+    if (dependencies.marketData) app.use('/api', requireUser(tokens), createMarketDataRouter(dependencies.marketData));
   }
   app.use(notFound);
   app.use(createErrorHandler(dependencies.logger ?? console));
