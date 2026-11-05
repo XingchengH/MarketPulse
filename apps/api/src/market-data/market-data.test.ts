@@ -3,6 +3,7 @@ import { normalizeAlpacaMessage } from './normalizer.js';
 import { MarketDataAggregator } from './aggregator.js';
 import { MarketClockCache } from './market-clock.js';
 import { ReconnectBackoff } from './reconnect.js';
+import { AlpacaProvider } from './alpaca-provider.js';
 
 describe('Alpaca market data', () => {
   it('normalizes a trade exactly', () => {
@@ -49,5 +50,30 @@ describe('Alpaca market data', () => {
     await clock.get(); now = 29_999; await clock.get();
     expect(fetchClock).toHaveBeenCalledTimes(1);
     now = 30_000; await clock.get(); expect(fetchClock).toHaveBeenCalledTimes(2);
+  });
+
+  it('handles Alpaca status and subscription control acknowledgements', async () => {
+    const sent: string[] = [];
+    const listeners = new Map<string, (event: { data?: unknown }) => void>();
+    const socket = {
+      send: (value: string) => sent.push(value), close: () => undefined,
+      addEventListener: (type: 'open' | 'close' | 'message' | 'error', listener: (event: { data?: unknown }) => void) => { listeners.set(type, listener); },
+    };
+    const provider = new AlpacaProvider({ apiKey: 'key', apiSecret: 'secret', socketFactory: () => socket });
+    await provider.connect(['AAPL']);
+    expect(provider.state()).toBe('connecting');
+    listeners.get('open')?.({});
+    expect(JSON.parse(sent[0])).toEqual({ action: 'auth', key: 'key', secret: 'secret' });
+    listeners.get('message')?.({ data: JSON.stringify([{ T: 'success', msg: 'connected' }]) });
+    expect(provider.state()).toBe('connecting');
+    listeners.get('message')?.({ data: JSON.stringify([{ T: 'success', msg: 'authenticated' }]) });
+    expect(JSON.parse(sent[1])).toEqual({ action: 'subscribe', trades: ['AAPL'], quotes: ['AAPL'] });
+    listeners.get('message')?.({ data: JSON.stringify([{ T: 'subscription', trades: ['AAPL'], quotes: ['AAPL'], bars: [] }]) });
+    expect(provider.state()).toBe('connected');
+    await provider.replaceSubscriptions(['MSFT']);
+    expect(sent.slice(-2).map(value => JSON.parse(value))).toEqual([
+      { action: 'unsubscribe', trades: ['AAPL'], quotes: ['AAPL'] },
+      { action: 'subscribe', trades: ['MSFT'], quotes: ['MSFT'] },
+    ]);
   });
 });

@@ -31,11 +31,10 @@ const configured = Boolean(config.alpaca.apiKey && config.alpaca.apiSecret);
 if (configured) {
   const symbols = (await Watchlist.find({ enabled: true }).select('symbol').lean()) as Array<{ symbol: string }>;
   subscribedSymbols = symbols.map(item => item.symbol);
-  marketProvider.replaceSubscriptions(subscribedSymbols);
-  await marketProvider.connect();
+  await marketProvider.connect(subscribedSymbols);
 }
 const marketData = {
-  overview: async () => ({ provider: marketProvider.name, providerState: marketProvider.state, symbols: subscribedSymbols }),
+  overview: async () => ({ provider: marketProvider.name, providerState: marketProvider.state(), symbols: subscribedSymbols }),
   symbols: async () => Promise.all(subscribedSymbols.map(symbol => aggregator.snapshotWithMarketState(symbol))),
   symbol: async (symbol: string) => subscribedSymbols.includes(symbol) ? aggregator.snapshotWithMarketState(symbol) : null,
   metrics: async ({ symbol, from, to }: { symbol: string; from: Date; to: Date }) => MetricBucket.find({ symbol, bucketStart: { $gte: from, $lte: to } }).sort({ bucketStart: 1 }).lean(),

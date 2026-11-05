@@ -17,7 +17,7 @@ export interface AlpacaProviderOptions {
 
 export class AlpacaProvider implements MarketDataProvider {
   readonly name = 'alpaca' as const;
-  state: ProviderState = 'unconfigured';
+  private providerState: ProviderState = 'unconfigured';
   private socket?: SocketLike; private desiredSymbols: string[] = []; private activeSymbols: string[] = []; private stopped = false;
   private readonly events = new Set<(event: MarketEvent) => void>(); private readonly operational = new Set<(event: OperationalEvent) => void>();
   private readonly backoff = new ReconnectBackoff();
@@ -30,8 +30,10 @@ export class AlpacaProvider implements MarketDataProvider {
       return { isOpen: body.is_open, nextOpen: body.next_open, nextClose: body.next_close };
     });
   }
-  private transition(state: ProviderState) { this.state = state; for (const listener of this.operational) listener({ type: 'state', state }); }
-  async connect(): Promise<void> {
+  state(): ProviderState { return this.providerState; }
+  private transition(state: ProviderState) { this.providerState = state; for (const listener of this.operational) listener({ type: 'state', state }); }
+  async connect(symbols: string[]): Promise<void> {
+    this.desiredSymbols = [...new Set(symbols.map(value => value.toUpperCase()))];
     if (!this.options.apiKey || !this.options.apiSecret) { this.transition('unconfigured'); return; }
     this.stopped = false; this.transition(this.socket ? 'reconnecting' : 'connecting');
     const socketFactory = this.options.socketFactory ?? ((url: string) => new WebSocket(url) as unknown as SocketLike);
@@ -46,16 +48,24 @@ export class AlpacaProvider implements MarketDataProvider {
       const batch = JSON.parse(typeof raw === 'string' ? raw : String(raw)) as Array<Record<string, unknown>>;
       for (const message of batch) {
         if (message.T === 'success' && message.msg === 'authenticated') { this.transition('connected'); this.backoff.connected(); this.sendSubscriptions(); continue; }
+        if (message.T === 'success' && message.msg === 'connected') { this.transition('connecting'); continue; }
+        if (message.T === 'subscription') {
+          const trades = Array.isArray(message.trades) ? message.trades.filter((value): value is string => typeof value === 'string') : [];
+          const quotes = Array.isArray(message.quotes) ? message.quotes.filter((value): value is string => typeof value === 'string') : [];
+          this.activeSymbols = [...new Set([...trades, ...quotes])];
+          this.transition('connected');
+          continue;
+        }
         if (message.T === 'error') { const code = Number(message.code); this.transition(code === 429 ? 'rate_limited' : 'unavailable'); for (const listener of this.operational) listener({ type: 'error', message: `Alpaca stream rejected request (${code || 'unknown'})` }); continue; }
         const event = normalizeAlpacaMessage(message); if (event) for (const listener of this.events) listener(event);
       }
     } catch { for (const listener of this.operational) listener({ type: 'error', message: 'Invalid Alpaca stream message' }); }
   }
-  private scheduleReconnect() { this.transition('reconnecting'); for (const listener of this.operational) listener({ type: 'reconnect' }); (this.options.setTimeout ?? setTimeout)(() => void this.connect(), this.backoff.nextDelay()); }
+  private scheduleReconnect() { this.transition('reconnecting'); for (const listener of this.operational) listener({ type: 'reconnect' }); (this.options.setTimeout ?? setTimeout)(() => void this.connect(this.desiredSymbols), this.backoff.nextDelay()); }
   private sendSubscriptions() { if (this.socket) { this.socket.send(JSON.stringify({ action: 'subscribe', trades: this.desiredSymbols, quotes: this.desiredSymbols })); this.activeSymbols = [...this.desiredSymbols]; } }
-  replaceSubscriptions(symbols: readonly string[]): void {
+  async replaceSubscriptions(symbols: string[]): Promise<void> {
     const previous = this.activeSymbols; this.desiredSymbols = [...new Set(symbols.map(value => value.toUpperCase()))];
-    if (this.state === 'connected' && this.socket) {
+    if (this.providerState === 'connected' && this.socket) {
       if (previous.length) this.socket.send(JSON.stringify({ action: 'unsubscribe', trades: previous, quotes: previous }));
       this.sendSubscriptions();
     }
@@ -63,14 +73,15 @@ export class AlpacaProvider implements MarketDataProvider {
   async disconnect(): Promise<void> { this.stopped = true; this.socket?.close(); this.socket = undefined; this.transition(this.options.apiKey && this.options.apiSecret ? 'unavailable' : 'unconfigured'); }
   onEvent(listener: (event: MarketEvent) => void) { this.events.add(listener); return () => this.events.delete(listener); }
   onOperationalEvent(listener: (event: OperationalEvent) => void) { this.operational.add(listener); return () => this.operational.delete(listener); }
-  async getMarketClock(): Promise<MarketClock> { const clock = await this.clock.get(); if (!clock.isOpen) this.transition('market_closed'); else if (this.state === 'market_closed') this.transition('connected'); return clock; }
+  async getMarketClock(): Promise<MarketClock> { const clock = await this.clock.get(); if (!clock.isOpen) this.transition('market_closed'); else if (this.providerState === 'market_closed') this.transition('connected'); return clock; }
 }
 
 export class FakeMarketDataProvider implements MarketDataProvider {
-  readonly name = 'alpaca' as const; state: ProviderState = 'connected';
+  readonly name = 'alpaca' as const; private providerState: ProviderState = 'connected';
   private listeners = new Set<(event: MarketEvent) => void>();
   constructor(nodeEnv = process.env.NODE_ENV) { if (nodeEnv !== 'test') throw new Error('Fake market data provider is test-only'); }
-  async connect() {} replaceSubscriptions(_symbols: readonly string[]) {} async disconnect() {}
+  state() { return this.providerState; }
+  async connect(_symbols: string[]) {} async replaceSubscriptions(_symbols: string[]) {} async disconnect() {}
   onEvent(listener: (event: MarketEvent) => void) { this.listeners.add(listener); return () => this.listeners.delete(listener); }
   onOperationalEvent(_listener: (event: OperationalEvent) => void) { return () => undefined; }
   async getMarketClock() { return { isOpen: true, nextOpen: '', nextClose: '' }; }

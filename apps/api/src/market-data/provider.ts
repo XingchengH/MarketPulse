@@ -9,9 +9,9 @@ export interface MarketClock { isOpen: boolean; nextOpen: string; nextClose: str
 
 export interface MarketDataProvider {
   readonly name: 'alpaca';
-  readonly state: ProviderState;
-  connect(): Promise<void>;
-  replaceSubscriptions(symbols: readonly string[]): void;
+  state(): ProviderState;
+  connect(symbols: string[]): Promise<void>;
+  replaceSubscriptions(symbols: string[]): Promise<void>;
   disconnect(): Promise<void>;
   onEvent(listener: (event: MarketEvent) => void): () => void;
   onOperationalEvent(listener: (event: OperationalEvent) => void): () => void;
