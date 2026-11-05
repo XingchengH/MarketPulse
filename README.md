@@ -5,11 +5,11 @@ An original, interactive market data operations mockup based on the supplied res
 ## Run
 
 ```sh
-npm install
-npm run dev
+pnpm install
+pnpm run dev
 ```
 
-Open the local URL printed by Vite. `npm run build` checks TypeScript and creates `dist/`; `npm run preview` serves the build.
+Open the local URL printed by Vite. `pnpm run build` checks TypeScript and creates `dist/`; `pnpm run preview` serves the build.
 
 ## Review the workflows
 
