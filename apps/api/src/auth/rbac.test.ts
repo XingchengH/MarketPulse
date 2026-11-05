@@ -3,7 +3,7 @@ import request from 'supertest';
 import { describe, expect, it } from 'vitest';
 import type { Role } from '@marketpulse/contracts';
 import { createAdminUsersRouter, type AdminUserRepository } from '../routes/admin-users.js';
-import { requireRole, requireUser } from './middleware.js';
+import { requireRole, requireUser, type CurrentRoleResolver } from './middleware.js';
 import { createTokenService } from './tokens.js';
 
 const tokens = createTokenService('rbac-test-access-secret', 'rbac-test-refresh-pepper');
@@ -13,10 +13,11 @@ async function cookie(role: Role) {
   return `access_token=${value}`;
 }
 
-function appFor(role: Role, repository?: AdminUserRepository) {
+function appFor(role: Role, repository?: AdminUserRepository, resolveCurrentRole?: CurrentRoleResolver) {
   const app = express();
   app.use(express.json());
-  app.post('/test/alerts/:id/acknowledge', requireUser(tokens), requireRole('operator'), (_req, res) => res.sendStatus(200));
+  const resolveRole: CurrentRoleResolver = resolveCurrentRole ?? (async (id: string) => id.startsWith('admin') ? 'admin' : id.startsWith('operator') ? 'operator' : 'viewer');
+  app.post('/test/alerts/:id/acknowledge', requireUser(tokens), requireRole('operator', resolveRole), (_req, res) => res.sendStatus(200));
   if (repository) app.use('/api/admin/users', requireUser(tokens), createAdminUsersRouter(repository));
   return app;
 }
@@ -98,5 +99,14 @@ describe('RBAC', () => {
     expect((await request(app).get('/api/admin/users').set('Cookie', staleAdminCookie)).status).toBe(403);
     expect((await request(app).patch('/api/admin/users/admin-1/role').set('Cookie', staleAdminCookie).send({ role: 'admin' })).status).toBe(403);
     expect(currentRole).toBe('viewer');
+  });
+
+  it('removes operator access immediately after demotion despite a valid operator JWT', async () => {
+    let currentRole: Role = 'operator';
+    const staleOperatorCookie = await cookie('operator');
+    const app = appFor('operator', undefined, async () => currentRole);
+    expect((await request(app).post('/test/alerts/a/acknowledge').set('Cookie', staleOperatorCookie)).status).toBe(200);
+    currentRole = 'viewer';
+    expect((await request(app).post('/test/alerts/a/acknowledge').set('Cookie', staleOperatorCookie)).status).toBe(403);
   });
 });
