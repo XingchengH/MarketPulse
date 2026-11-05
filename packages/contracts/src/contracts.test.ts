@@ -1,7 +1,24 @@
 import { describe, expect, it } from 'vitest';
-import { marketEventSchema, roleSchema, ruleInputSchema } from './index.js';
+import {
+  marketEventSchema,
+  roleSchema,
+  ruleInputSchema,
+  ruleMetricSchema,
+  ruleOperatorSchema,
+} from './index.js';
 
 describe('shared contracts', () => {
+  it('exports the canonical rule metric and operator enums', () => {
+    expect(ruleMetricSchema.options).toEqual([
+      'observedLatencyMs',
+      'messagesPerSecond',
+      'lastEventAgeSeconds',
+      'providerErrors',
+      'reconnects',
+    ]);
+    expect(ruleOperatorSchema.options).toEqual(['gt', 'gte', 'lt', 'lte']);
+  });
+
   it('accepts a normalized market trade', () => {
     expect(
       marketEventSchema.parse({
