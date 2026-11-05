@@ -5,9 +5,9 @@ import { requireRole } from '../auth/middleware.js';
 
 export interface AdminUserRepository {
   listUsers(): Promise<PublicUser[]>;
-  findUserById(id: string): Promise<PublicUser | null>;
-  countAdmins(): Promise<number>;
-  setRole(id: string, role: Role): Promise<PublicUser | null>;
+  setRoleSafely(id: string, role: Role): Promise<
+    { status: 'updated'; user: PublicUser } | { status: 'not_found' } | { status: 'final_admin' }
+  >;
 }
 
 export function createAdminUsersRouter(repository: AdminUserRepository): Router {
@@ -17,12 +17,10 @@ export function createAdminUsersRouter(repository: AdminUserRepository): Router 
   router.patch('/:id/role', async (request, response) => {
     const parsed = roleSchema.safeParse(request.body?.role);
     if (!parsed.success) return response.status(400).json({ error: { code: 'INVALID_ROLE', message: 'Invalid role' } });
-    const current = await repository.findUserById(request.params.id);
-    if (!current) return response.status(404).json({ error: { code: 'USER_NOT_FOUND', message: 'User not found' } });
-    if (current.role === 'admin' && parsed.data !== 'admin' && await repository.countAdmins() <= 1) {
-      return response.status(409).json({ error: { code: 'FINAL_ADMIN', message: 'The final admin cannot be demoted' } });
-    }
-    response.json({ user: await repository.setRole(request.params.id, parsed.data) });
+    const result = await repository.setRoleSafely(request.params.id, parsed.data);
+    if (result.status === 'not_found') return response.status(404).json({ error: { code: 'USER_NOT_FOUND', message: 'User not found' } });
+    if (result.status === 'final_admin') return response.status(409).json({ error: { code: 'FINAL_ADMIN', message: 'The final admin cannot be demoted' } });
+    response.json({ user: result.user });
   });
   return router;
 }

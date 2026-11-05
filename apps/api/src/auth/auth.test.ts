@@ -118,6 +118,37 @@ describe('authentication', () => {
     expect(rejectedReplacement.status).toBe(401);
   });
 
+  it('allows only one concurrent refresh and reliably compromises its successor family', async () => {
+    const agent = request.agent(makeApp(repository));
+    const start = await agent.get('/api/auth/google');
+    const state = cookieValue(start.headers['set-cookie'], 'oauth_state');
+    const login = await agent.get(`/api/auth/google/callback?code=ok&state=${state}`);
+    const original = cookieValue(login.headers['set-cookie'], 'refresh_token');
+
+    const responses = await Promise.all([
+      request(makeApp(repository)).post('/api/auth/refresh').set('Cookie', `refresh_token=${original}`),
+      request(makeApp(repository)).post('/api/auth/refresh').set('Cookie', `refresh_token=${original}`),
+    ]);
+    expect(responses.map((response) => response.status).sort()).toEqual([204, 401]);
+    const winner = responses.find((response) => response.status === 204)!;
+    const successor = cookieValue(winner.headers['set-cookie'], 'refresh_token');
+    expect((await request(makeApp(repository)).post('/api/auth/refresh').set('Cookie', `refresh_token=${successor}`)).status).toBe(401);
+  });
+
+  it('treats reuse as compromise even after the revoked token has expired', async () => {
+    const agent = request.agent(makeApp(repository));
+    const start = await agent.get('/api/auth/google');
+    const state = cookieValue(start.headers['set-cookie'], 'oauth_state');
+    const login = await agent.get(`/api/auth/google/callback?code=ok&state=${state}`);
+    const original = cookieValue(login.headers['set-cookie'], 'refresh_token');
+    const rotated = await request(makeApp(repository)).post('/api/auth/refresh').set('Cookie', `refresh_token=${original}`);
+    const successor = cookieValue(rotated.headers['set-cookie'], 'refresh_token');
+    repository.refreshes.get(createTokenService(config.accessTokenSecret, config.refreshTokenPepper).hashRefreshToken(original))!.expiresAt = new Date(0);
+
+    expect((await request(makeApp(repository)).post('/api/auth/refresh').set('Cookie', `refresh_token=${original}`)).status).toBe(401);
+    expect((await request(makeApp(repository)).post('/api/auth/refresh').set('Cookie', `refresh_token=${successor}`)).status).toBe(401);
+  });
+
   it('revokes the refresh family and clears cookies on logout', async () => {
     const agent = request.agent(makeApp(repository));
     const start = await agent.get('/api/auth/google');

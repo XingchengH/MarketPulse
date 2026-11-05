@@ -22,32 +22,55 @@ function appFor(role: Role, repository?: AdminUserRepository) {
 }
 
 describe('RBAC', () => {
-  it('enforces viewer < operator < admin on a test-only acknowledge route', async () => {
-    expect((await request(appFor('viewer')).post('/test/alerts/a/acknowledge').set('Cookie', await cookie('viewer'))).status).toBe(403);
-    expect((await request(appFor('operator')).post('/test/alerts/a/acknowledge').set('Cookie', await cookie('operator'))).status).toBe(200);
+  it('enforces the complete viewer < operator < admin matrix on a test-only operator route', async () => {
+    for (const [role, expected] of [['viewer', 403], ['operator', 200], ['admin', 200]] as const) {
+      expect((await request(appFor(role)).post('/test/alerts/a/acknowledge').set('Cookie', await cookie(role))).status).toBe(expected);
+    }
+    expect((await request(appFor('viewer')).post('/test/alerts/a/acknowledge')).status).toBe(401);
   });
 
-  it('allows only admins to change roles', async () => {
+  it('enforces the complete role matrix for admin list and role changes', async () => {
     const repository: AdminUserRepository = {
       listUsers: async () => [],
-      setRole: async () => ({ id: 'target', email: 't@example.com', name: 'T', role: 'operator' }),
-      countAdmins: async () => 2,
-      findUserById: async () => ({ id: 'target', email: 't@example.com', name: 'T', role: 'viewer' }),
+      setRoleSafely: async () => ({ status: 'updated', user: { id: 'target', email: 't@example.com', name: 'T', role: 'operator' } }),
     };
-    const operator = await request(appFor('operator', repository)).patch('/api/admin/users/target/role').set('Cookie', await cookie('operator')).send({ role: 'operator' });
-    const admin = await request(appFor('admin', repository)).patch('/api/admin/users/target/role').set('Cookie', await cookie('admin')).send({ role: 'operator' });
-    expect(operator.status).toBe(403);
-    expect(admin.status).toBe(200);
+    for (const [role, expected] of [['viewer', 403], ['operator', 403], ['admin', 200]] as const) {
+      const app = appFor(role, repository);
+      expect((await request(app).get('/api/admin/users').set('Cookie', await cookie(role))).status).toBe(expected);
+      expect((await request(app).patch('/api/admin/users/target/role').set('Cookie', await cookie(role)).send({ role: 'operator' })).status).toBe(expected);
+    }
+    const anonymous = appFor('viewer', repository);
+    expect((await request(anonymous).get('/api/admin/users')).status).toBe(401);
+    expect((await request(anonymous).patch('/api/admin/users/target/role').send({ role: 'operator' })).status).toBe(401);
   });
 
   it('prevents demoting the final admin', async () => {
     const repository: AdminUserRepository = {
       listUsers: async () => [],
-      setRole: async () => { throw new Error('must not update'); },
-      countAdmins: async () => 1,
-      findUserById: async () => ({ id: 'admin-1', email: 'a@example.com', name: 'A', role: 'admin' }),
+      setRoleSafely: async () => ({ status: 'final_admin' }),
     };
     const response = await request(appFor('admin', repository)).patch('/api/admin/users/admin-1/role').set('Cookie', await cookie('admin')).send({ role: 'viewer' });
     expect(response.status).toBe(409);
+  });
+
+  it('serializes concurrent admin demotions so one admin always remains', async () => {
+    const roles = new Map([['admin-1', 'admin' as Role], ['admin-2', 'admin' as Role]]);
+    const repository: AdminUserRepository = {
+      listUsers: async () => [],
+      async setRoleSafely(id, role) {
+        const current = roles.get(id);
+        if (!current) return { status: 'not_found' };
+        if (current === 'admin' && role !== 'admin' && [...roles.values()].filter((value) => value === 'admin').length <= 1) return { status: 'final_admin' };
+        roles.set(id, role);
+        return { status: 'updated', user: { id, email: `${id}@example.com`, name: id, role } };
+      },
+    };
+    const app = appFor('admin', repository);
+    const responses = await Promise.all([
+      request(app).patch('/api/admin/users/admin-1/role').set('Cookie', await cookie('admin')).send({ role: 'viewer' }),
+      request(app).patch('/api/admin/users/admin-2/role').set('Cookie', await cookie('admin')).send({ role: 'viewer' }),
+    ]);
+    expect(responses.map((response) => response.status).sort()).toEqual([200, 409]);
+    expect([...roles.values()].filter((role) => role === 'admin')).toHaveLength(1);
   });
 });

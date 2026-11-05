@@ -7,7 +7,7 @@ import { requireUser } from '../auth/middleware.js';
 import type { TokenService } from '../auth/tokens.js';
 
 export interface PublicUser { id: string; email: string; name: string; picture?: string; role: Role }
-export interface RefreshRecord { tokenHash: string; userId: string; familyId: string; expiresAt: Date; revokedAt?: Date; replacedByHash?: string }
+export interface RefreshRecord { tokenHash: string; userId: string; familyId: string; expiresAt: Date; purgeAt: Date; revokedAt?: Date; replacedByHash?: string }
 export interface AuthRepository {
   upsertGoogleUser(profile: GoogleProfile): Promise<PublicUser>;
   findUserById(id: string): Promise<PublicUser | null>;
@@ -18,7 +18,11 @@ export interface AuthRepository {
 }
 
 interface Dependencies { provider: GoogleIdentityProvider; repository: AuthRepository; tokens: TokenService; nodeEnv: string; webOrigin: string }
-const refreshExpiry = () => new Date(Date.now() + 30 * 24 * 60 * 60 * 1000);
+const refreshExpiry = (familyPurge?: Date) => new Date(Math.min(
+  Date.now() + 30 * 24 * 60 * 60 * 1000,
+  familyPurge?.getTime() ?? Number.POSITIVE_INFINITY,
+));
+const refreshPurge = () => new Date(Date.now() + 60 * 24 * 60 * 60 * 1000);
 const safeEqual = (left: string, right: string) => {
   const a = Buffer.from(left); const b = Buffer.from(right);
   return a.length === b.length && timingSafeEqual(a, b);
@@ -44,7 +48,7 @@ export function createAuthRouter({ provider, repository, tokens, nodeEnv }: Depe
     const user = await repository.upsertGoogleUser(profile);
     const access = await tokens.signAccessToken(user);
     const refresh = tokens.newRefreshToken();
-    await repository.saveRefresh({ tokenHash: refresh.hash, userId: user.id, familyId: refresh.familyId, expiresAt: refreshExpiry() });
+    await repository.saveRefresh({ tokenHash: refresh.hash, userId: user.id, familyId: refresh.familyId, expiresAt: refreshExpiry(), purgeAt: refreshPurge() });
     setAuthCookies(response, access, refresh.value, production);
     response.redirect('/');
   });
@@ -61,16 +65,23 @@ export function createAuthRouter({ provider, repository, tokens, nodeEnv }: Depe
     if (!value) return response.status(401).json({ error: { code: 'INVALID_REFRESH', message: 'Invalid refresh token' } });
     const hash = tokens.hashRefreshToken(value);
     const current = await repository.findRefresh(hash);
-    if (!current || current.expiresAt <= new Date()) return response.status(401).json({ error: { code: 'INVALID_REFRESH', message: 'Invalid refresh token' } });
+    if (!current) return response.status(401).json({ error: { code: 'INVALID_REFRESH', message: 'Invalid refresh token' } });
     if (current.revokedAt) {
       await repository.revokeFamily(current.familyId);
       clearAuthCookies(response, production);
       return response.status(401).json({ error: { code: 'REFRESH_REUSE', message: 'Refresh token reuse detected' } });
     }
+    if (current.expiresAt <= new Date()) return response.status(401).json({ error: { code: 'INVALID_REFRESH', message: 'Invalid refresh token' } });
     const user = await repository.findUserById(current.userId);
     if (!user) return response.status(401).json({ error: { code: 'INVALID_REFRESH', message: 'Invalid refresh token' } });
     const next = tokens.newRefreshToken();
-    const replacement = { tokenHash: next.hash, userId: user.id, familyId: current.familyId, expiresAt: refreshExpiry() };
+    const replacement = {
+      tokenHash: next.hash,
+      userId: user.id,
+      familyId: current.familyId,
+      expiresAt: refreshExpiry(current.purgeAt),
+      purgeAt: current.purgeAt,
+    };
     if (!(await repository.rotateRefresh(hash, replacement))) {
       await repository.revokeFamily(current.familyId);
       return response.status(401).json({ error: { code: 'REFRESH_REUSE', message: 'Refresh token reuse detected' } });
