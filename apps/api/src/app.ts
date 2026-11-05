@@ -7,11 +7,21 @@ import { createErrorHandler, type ErrorLogger, notFound } from './http/errors.js
 import { requestContext } from './http/request-context.js';
 import { createHealthRouter } from './routes/health.js';
 import { createSetupRouter } from './routes/setup.js';
+import { createAuthRouter, type AuthRepository } from './routes/auth.js';
+import { createAdminUsersRouter, type AdminUserRepository } from './routes/admin-users.js';
+import type { GoogleIdentityProvider } from './auth/google-provider.js';
+import { createTokenService, type TokenService } from './auth/tokens.js';
+import { requireUser } from './auth/middleware.js';
 
 export interface AppDependencies {
   config: AppConfig;
   database: Pick<Database, 'isReady'>;
   logger?: ErrorLogger;
+  auth?: {
+    provider: GoogleIdentityProvider;
+    repository: AuthRepository & AdminUserRepository;
+    tokens?: TokenService;
+  };
 }
 
 export function createApp(dependencies: AppDependencies): Express {
@@ -23,6 +33,17 @@ export function createApp(dependencies: AppDependencies): Express {
   app.use(express.json({ limit: '100kb' }));
   app.use('/health', createHealthRouter(dependencies.database));
   app.use('/api/setup', createSetupRouter(dependencies.config, dependencies.database));
+  if (dependencies.auth) {
+    const tokens = dependencies.auth.tokens ?? createTokenService(dependencies.config.accessTokenSecret, dependencies.config.refreshTokenPepper);
+    app.use('/api/auth', createAuthRouter({
+      provider: dependencies.auth.provider,
+      repository: dependencies.auth.repository,
+      tokens,
+      nodeEnv: dependencies.config.nodeEnv,
+      webOrigin: dependencies.config.webOrigin,
+    }));
+    app.use('/api/admin/users', requireUser(tokens), createAdminUsersRouter(dependencies.auth.repository));
+  }
   app.use(notFound);
   app.use(createErrorHandler(dependencies.logger ?? console));
   return app;

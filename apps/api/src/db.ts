@@ -1,4 +1,5 @@
 import { MongoClient } from 'mongodb';
+import mongoose from 'mongoose';
 
 export interface Database {
   connect(): Promise<void>;
@@ -21,6 +22,7 @@ interface DatabaseOptions {
 
 export function connectDatabase(uri: string, options: DatabaseOptions = {}): Database {
   const client = options.client ?? new MongoClient(uri);
+  const ownsClient = options.client === undefined;
   const pingTimeoutMs = options.pingTimeoutMs ?? 1_000;
 
   async function probe(): Promise<boolean> {
@@ -36,12 +38,17 @@ export function connectDatabase(uri: string, options: DatabaseOptions = {}): Dat
   return {
     async connect() {
       await client.connect();
+      if (ownsClient) {
+        // Mongoose and the app may resolve patch-level copies of the MongoDB driver.
+        mongoose.connection.setClient(client as unknown as Parameters<typeof mongoose.connection.setClient>[0]);
+      }
       if (!(await probe())) {
         throw new Error('MongoDB readiness probe failed during connection');
       }
     },
     async disconnect() {
-      await client.close();
+      if (ownsClient) await mongoose.disconnect();
+      else await client.close();
     },
     isReady: probe,
   };

@@ -11,10 +11,13 @@
   },
   "dependencies": {
     "@marketpulse/contracts": "workspace:*",
+    "arctic": "^3.7.0",
     "cors": "^2.8.5",
     "express": "^5.1.0",
     "helmet": "^8.1.0",
+    "jose": "^6.1.0",
     "mongodb": "^7.0.0",
+    "mongoose": "^9.0.0",
     "zod": "^4.1.12"
   },
   "devDependencies": {
