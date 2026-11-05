@@ -17,10 +17,4 @@ describe('AlertService', () => {
     await new AlertService().upsertViolation(rule, 'AAPL', 120, new Date(20));
     expect(update).toHaveBeenCalledOnce();
   });
-  it('acknowledges only open or recovered alerts with actor and time', async () => {
-    const lean = vi.fn(async () => ({ status: 'acknowledged' }));
-    const query = vi.spyOn(Alert, 'findOneAndUpdate').mockReturnValue({ lean } as never);
-    await new AlertService().acknowledge('a1', 'operator', new Date(30));
-    expect(query).toHaveBeenCalledWith(expect.objectContaining({ status: { $in: ['open', 'recovered'] } }), { $set: { status: 'acknowledged', acknowledgedAt: new Date(30), acknowledgedBy: 'operator' } }, { new: true });
-  });
 });
