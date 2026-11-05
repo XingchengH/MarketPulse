@@ -20,7 +20,7 @@ export function createApp(dependencies: AppDependencies): Express {
   app.use(helmet());
   app.use(cors({ origin: dependencies.config.webOrigin, credentials: true }));
   app.use(express.json({ limit: '100kb' }));
-  app.use('/api/health', createHealthRouter(dependencies.database));
+  app.use('/health', createHealthRouter(dependencies.database));
   app.use('/api/setup', createSetupRouter(dependencies.config, dependencies.database));
   app.use(notFound);
   app.use(errorHandler);

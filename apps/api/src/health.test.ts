@@ -36,8 +36,8 @@ describe('service health', () => {
   it('keeps liveness up while readiness reports an unavailable database', async () => {
     const app = createApp({ ...unconfigured, database: { isReady: () => false } });
 
-    expect((await request(app).get('/api/health/live')).body).toEqual({ status: 'live' });
-    const readiness = await request(app).get('/api/health/ready');
+    expect((await request(app).get('/health/live')).body).toEqual({ status: 'live' });
+    const readiness = await request(app).get('/health/ready');
     expect(readiness.status).toBe(503);
     expect(readiness.body).toEqual({ status: 'not_ready', services: { mongodb: 'unavailable' } });
   });
