@@ -1,5 +1,5 @@
 import request from 'supertest';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { createApp } from './app.js';
 
 const unconfigured = {
@@ -54,5 +54,27 @@ describe('service health', () => {
       },
     });
     expect(response.headers['x-request-id']).toBe(response.body.error.requestId);
+  });
+
+  it('logs unexpected errors with the request ID and keeps their details out of the response', async () => {
+    const logger = { error: vi.fn() };
+    const response = await request(createApp({ ...unconfigured, logger }))
+      .post('/api/setup/status')
+      .set('content-type', 'application/json')
+      .send('{"secret":"sensitive-value"');
+
+    expect(response.status).toBe(500);
+    expect(response.body).toEqual({
+      error: {
+        code: 'INTERNAL_ERROR',
+        message: 'Internal server error',
+        requestId: expect.any(String),
+      },
+    });
+    expect(JSON.stringify(response.body)).not.toContain('sensitive-value');
+    expect(logger.error).toHaveBeenCalledWith(
+      expect.objectContaining({ requestId: response.body.error.requestId, error: expect.any(Error) }),
+      'Unexpected request error',
+    );
   });
 });

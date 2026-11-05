@@ -31,7 +31,7 @@ const environmentSchema = z
     if (value.NODE_ENV !== 'production') return;
 
     for (const field of ['ACCESS_TOKEN_SECRET', 'REFRESH_TOKEN_PEPPER'] as const) {
-      if (value[field].length < 32) {
+      if (value[field].length < 32 || value[field].trim().length === 0) {
         context.addIssue({
           code: 'custom',
           path: [field],

@@ -1,6 +1,7 @@
 import { createApp } from './app.js';
 import { loadConfig } from './config.js';
 import { connectDatabase } from './db.js';
+import { createGracefulShutdown } from './http/shutdown.js';
 
 const config = loadConfig();
 const database = connectDatabase(config.mongodbUri);
@@ -10,10 +11,7 @@ const server = createApp({ config, database }).listen(config.port, () => {
   console.log(`API listening on port ${config.port}`);
 });
 
-async function shutdown(): Promise<void> {
-  server.close();
-  await database.disconnect();
-}
+const shutdown = createGracefulShutdown({ server, database });
 
-process.once('SIGINT', () => void shutdown());
-process.once('SIGTERM', () => void shutdown());
+process.once('SIGINT', () => void shutdown('SIGINT'));
+process.once('SIGTERM', () => void shutdown('SIGTERM'));

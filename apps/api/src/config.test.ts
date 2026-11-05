@@ -42,4 +42,35 @@ describe('loadConfig', () => {
       }),
     ).toThrow(/32 characters/);
   });
+
+  it('rejects whitespace-only production secrets without trimming legitimate values', () => {
+    expect(() =>
+      loadConfig({
+        ...localEnv,
+        NODE_ENV: 'production',
+        GOOGLE_CLIENT_ID: 'google-id',
+        GOOGLE_CLIENT_SECRET: 'google-secret',
+        GOOGLE_REDIRECT_URI: 'https://example.com/callback',
+        ALPACA_API_KEY: 'alpaca-key',
+        ALPACA_API_SECRET: 'alpaca-secret',
+        ACCESS_TOKEN_SECRET: ' '.repeat(32),
+        REFRESH_TOKEN_PEPPER: 'x'.repeat(32),
+      }),
+    ).toThrow(/ACCESS_TOKEN_SECRET/);
+
+    const accessTokenSecret = `  ${'x'.repeat(32)}  `;
+    expect(
+      loadConfig({
+        ...localEnv,
+        NODE_ENV: 'production',
+        GOOGLE_CLIENT_ID: 'google-id',
+        GOOGLE_CLIENT_SECRET: 'google-secret',
+        GOOGLE_REDIRECT_URI: 'https://example.com/callback',
+        ALPACA_API_KEY: 'alpaca-key',
+        ALPACA_API_SECRET: 'alpaca-secret',
+        ACCESS_TOKEN_SECRET: accessTokenSecret,
+        REFRESH_TOKEN_PEPPER: 'x'.repeat(32),
+      }).accessTokenSecret,
+    ).toBe(accessTokenSecret);
+  });
 });

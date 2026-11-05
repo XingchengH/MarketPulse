@@ -3,7 +3,7 @@ import express, { type Express } from 'express';
 import helmet from 'helmet';
 import type { AppConfig } from './config.js';
 import type { Database } from './db.js';
-import { errorHandler, notFound } from './http/errors.js';
+import { createErrorHandler, type ErrorLogger, notFound } from './http/errors.js';
 import { requestContext } from './http/request-context.js';
 import { createHealthRouter } from './routes/health.js';
 import { createSetupRouter } from './routes/setup.js';
@@ -11,6 +11,7 @@ import { createSetupRouter } from './routes/setup.js';
 export interface AppDependencies {
   config: AppConfig;
   database: Pick<Database, 'isReady'>;
+  logger?: ErrorLogger;
 }
 
 export function createApp(dependencies: AppDependencies): Express {
@@ -23,6 +24,6 @@ export function createApp(dependencies: AppDependencies): Express {
   app.use('/health', createHealthRouter(dependencies.database));
   app.use('/api/setup', createSetupRouter(dependencies.config, dependencies.database));
   app.use(notFound);
-  app.use(errorHandler);
+  app.use(createErrorHandler(dependencies.logger ?? console));
   return app;
 }

@@ -8,9 +8,10 @@ export function createSetupRouter(
 ): Router {
   const router = Router();
 
-  router.get('/status', (_request, response) => {
+  router.get('/status', async (_request, response) => {
+    const mongodbReady = await database.isReady();
     const services = {
-      mongodb: database.isReady() ? 'ready' : 'unavailable',
+      mongodb: mongodbReady ? 'ready' : 'unavailable',
       googleOAuth:
         config.google.clientId && config.google.clientSecret && config.google.redirectUri
           ? 'ready'
