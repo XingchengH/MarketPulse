@@ -1,0 +1,37 @@
+import { render, screen, waitFor } from '@testing-library/react';
+import { Provider } from 'react-redux';
+import { MemoryRouter } from 'react-router-dom';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { cleanup } from '@testing-library/react';
+import { makeStore } from '../store';
+import { AuthGate } from './AuthGate';
+
+const reply = (body: unknown, status = 200) => Promise.resolve(new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } }));
+afterEach(() => { cleanup(); vi.restoreAllMocks(); });
+const renderGate = () => render(<Provider store={makeStore()}><MemoryRouter><AuthGate><div>private</div></AuthGate></MemoryRouter></Provider>);
+
+describe('startup gate', () => {
+  it('shows loading, then exact Alpaca setup guidance without requesting the session', async () => {
+    const fetcher = vi.spyOn(globalThis, 'fetch').mockImplementation(() => reply({ configured: false, services: { mongodb: 'ready', googleOAuth: 'ready', alpaca: 'missing', tokens: 'ready' } }));
+    renderGate();
+    expect(screen.getByText('Checking services…')).toBeInTheDocument();
+    expect(await screen.findByText('Alpaca credentials are missing')).toBeInTheDocument();
+    expect(fetcher).toHaveBeenCalledTimes(1);
+    expect(screen.queryByText('2.90M')).not.toBeInTheDocument();
+  });
+  it('offers Google login when configured but unauthenticated', async () => {
+    vi.spyOn(globalThis, 'fetch').mockImplementationOnce(() => reply({ configured: true, services: { mongodb: 'ready', googleOAuth: 'ready', alpaca: 'ready', tokens: 'ready' } })).mockImplementationOnce(() => reply({ error: { message: 'Authentication required' } }, 401));
+    renderGate();
+    expect(await screen.findByRole('link', { name: 'Continue with Google' })).toHaveAttribute('href', '/api/auth/google');
+  });
+  it('renders a recoverable setup error', async () => {
+    vi.spyOn(globalThis, 'fetch').mockRejectedValue(new Error('offline'));
+    renderGate();
+    expect(await screen.findByText('Service status is unavailable')).toBeInTheDocument();
+  });
+  it('renders protected content for a session', async () => {
+    vi.spyOn(globalThis, 'fetch').mockImplementationOnce(() => reply({ configured: true, services: { mongodb: 'ready', googleOAuth: 'ready', alpaca: 'ready', tokens: 'ready' } })).mockImplementationOnce(() => reply({ user: { id: '1', name: 'Analyst', email: 'a@b.test', role: 'viewer' } }));
+    renderGate();
+    await waitFor(() => expect(screen.getByText('private')).toBeInTheDocument());
+  });
+});
