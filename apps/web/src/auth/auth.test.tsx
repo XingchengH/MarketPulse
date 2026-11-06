@@ -24,6 +24,10 @@ describe('startup gate', () => {
     renderGate();
     expect(await screen.findByRole('link', { name: 'Continue with Google' })).toHaveAttribute('href', '/api/auth/google');
   });
+  it('shows a retryable session-service error for 5xx instead of Google login', async () => {
+    vi.spyOn(globalThis,'fetch').mockImplementationOnce(()=>reply({configured:true,services:{mongodb:'ready',googleOAuth:'ready',alpaca:'ready',tokens:'ready'}})).mockImplementationOnce(()=>reply({error:{message:'down'}},503));
+    renderGate(); expect(await screen.findByText('Session service is unavailable')).toBeInTheDocument(); expect(screen.queryByRole('link',{name:'Continue with Google'})).not.toBeInTheDocument(); expect(screen.getByRole('button',{name:'Retry'})).toBeInTheDocument();
+  });
   it('renders a recoverable setup error', async () => {
     vi.spyOn(globalThis, 'fetch').mockRejectedValue(new Error('offline'));
     renderGate();

@@ -6,6 +6,7 @@ import { render, screen, waitFor, cleanup } from '@testing-library/react';
 import { Provider } from 'react-redux';
 import { FeedsPage } from './FeedsPage';
 import { createElement } from 'react';
+import userEvent from '@testing-library/user-event';
 const row = (rate: number): SymbolSnapshot => ({ symbol: 'AAPL', feed: 'iex', receivedMessagesPerSecond: rate, lastEventAt: '2026-11-05T00:00:00.000Z', observedLatency: { latest: 4, p95: 6 }, staleDurationMs: 0, providerErrors: 0, reconnects: 0 });
 describe('dashboard realtime cache', () => {
   it('patches API 41 msg/s to socket 55 msg/s and invalidates visible resources on reconnect', async () => {
@@ -31,6 +32,6 @@ describe('dashboard realtime cache', () => {
   it('renders REST 41 msg/s and then the socket 55 msg/s snapshot', async () => {
     const store = makeStore(); await store.dispatch(api.util.upsertQueryData('symbols', undefined, { symbols:[row(41)] })); await store.dispatch(api.util.upsertQueryData('overview', undefined, { provider:'alpaca', providerState:'connected', symbols:['AAPL'] }));
     const handlers = new Map<string, (...args: unknown[]) => void>(); const socket = { on: vi.fn((name:string, fn:(...args:unknown[])=>void) => { handlers.set(name,fn); return socket; }), close:vi.fn(), io:{on:vi.fn()} }; bindSocket(store,socket as never);
-    render(createElement(Provider, { store, children: createElement(FeedsPage) })); expect(screen.getByText('41')).toBeInTheDocument(); expect(screen.getByText('IEX')).toBeInTheDocument(); handlers.get('symbols:snapshot')?.([row(55)]); await waitFor(() => expect(screen.getByText('55')).toBeInTheDocument()); cleanup();
+    render(createElement(Provider, { store, children: createElement(FeedsPage) })); expect(screen.getByText('41')).toBeInTheDocument(); expect(screen.getByText('IEX')).toBeInTheDocument(); await userEvent.click(screen.getByRole('button',{name:'AAPL'})); expect(screen.getByText('41 msg/s')).toBeInTheDocument(); handlers.get('symbols:snapshot')?.([row(55)]); await waitFor(() => expect(screen.getByText('55 msg/s')).toBeInTheDocument()); cleanup();
   });
 });
