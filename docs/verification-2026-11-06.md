@@ -11,7 +11,7 @@ The required gate completed successfully with `CI=true` where specified:
 - `docker compose config` — exit 0; API port 3000 and replica-set MongoDB configuration rendered successfully.
 - `CI=true pnpm --filter @marketpulse/e2e test` — exit 0; 1 integrated Playwright smoke test passed.
 
-Clean-checkout reproducibility was also checked by moving the ignored `apps/api/dist` directory out of the workspace and rerunning `CI=true pnpm typecheck`; it passed before the directory was restored.
+Clean-checkout reproducibility was checked by moving every ignored `apps/**/dist` and `packages/**/dist` directory out of the workspace, running the frozen install, and rerunning the exact gate. Root typecheck builds `@marketpulse/contracts` first, so downstream packages do not depend on stale generated declarations.
 
 The controlled E2E composes the production Express routes, HTTP and Socket.IO servers, OAuth state/callback and session flow, RBAC services, monitoring evaluator, models, alert/audit transactions, and a MongoDB replica set. Google identity and Alpaca IEX transport are test doubles. A narrow readiness/market-data façade replaces `server.ts` bootstrap, so the smoke does not exercise watchlist bootstrapping or minute-bucket writing; those remain separately tested. The AAPL trade is emitted directly through the in-process fake-provider handle; there is no event-injection HTTP or socket endpoint.
 

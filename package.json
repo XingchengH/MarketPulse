@@ -8,6 +8,6 @@
     "build": "pnpm -r build",
     "test": "pnpm -r --filter '!@marketpulse/e2e' test",
     "e2e": "pnpm --filter @marketpulse/e2e test",
-    "typecheck": "pnpm -r typecheck"
+    "typecheck": "pnpm --filter @marketpulse/contracts build && pnpm -r typecheck"
   }
 }
