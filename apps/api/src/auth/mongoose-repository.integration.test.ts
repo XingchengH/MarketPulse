@@ -1,10 +1,11 @@
 import { execFileSync } from 'node:child_process';
 import mongoose, { Types } from 'mongoose';
 import { MongoMemoryReplSet } from 'mongodb-memory-server';
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { AuthInvariant } from '../models/auth-invariant.js';
 import { RefreshToken } from '../models/refresh-token.js';
 import { User } from '../models/user.js';
+import { AuditEvent } from '../models/audit-event.js';
 import type { RefreshRecord } from '../routes/auth.js';
 import { MongooseAuthRepository } from './mongoose-repository.js';
 
@@ -20,12 +21,13 @@ describe('Mongoose auth transaction invariants', () => {
       replSet: { count: 1, storageEngine: 'wiredTiger' },
     });
     await mongoose.connect(replicaSet.getUri(), { dbName: 'auth-transactions' });
-    await Promise.all([User.syncIndexes(), RefreshToken.syncIndexes(), AuthInvariant.syncIndexes()]);
+    await Promise.all([User.syncIndexes(), RefreshToken.syncIndexes(), AuthInvariant.syncIndexes(), AuditEvent.syncIndexes()]);
   }, 60_000);
 
   beforeEach(async () => {
-    await Promise.all([User.deleteMany({}), RefreshToken.deleteMany({}), AuthInvariant.deleteMany({})]);
+    await Promise.all([User.deleteMany({}), RefreshToken.deleteMany({}), AuthInvariant.deleteMany({}), AuditEvent.collection.deleteMany({})]);
   });
+  afterEach(() => vi.restoreAllMocks());
 
   afterAll(async () => {
     await mongoose.disconnect();
@@ -58,12 +60,21 @@ describe('Mongoose auth transaction invariants', () => {
     expect(await AuthInvariant.countDocuments()).toBe(0);
 
     const outcomes = await Promise.all([
-      repository.setRoleSafely(String(first._id), 'viewer'),
-      repository.setRoleSafely(String(second._id), 'viewer'),
+      repository.setRoleSafely(String(first._id), 'viewer', { actorId: 'actor', requestId: 'one' }),
+      repository.setRoleSafely(String(second._id), 'viewer', { actorId: 'actor', requestId: 'two' }),
     ]);
 
     expect(outcomes.map((result) => result.status).sort()).toEqual(['final_admin', 'updated']);
     expect(await AuthInvariant.countDocuments({ key: 'roles' })).toBe(1);
     expect(await User.countDocuments({ role: 'admin' })).toBe(1);
+    expect(await AuditEvent.countDocuments({ action: 'user.role_changed' })).toBe(1);
+  });
+  it('commits role and before/after audit together and rolls back when audit insertion fails', async () => {
+    const user = await User.create({ googleSubject: 'g-role', email: 'role@example.com', name: 'Role', role: 'operator' });
+    await repository.setRoleSafely(String(user._id), 'viewer', { actorId: 'actor', requestId: 'success' });
+    expect(await AuditEvent.findOne({ requestId: 'success' }).lean()).toMatchObject({ before: { role: 'operator' }, after: { role: 'viewer' } });
+    vi.spyOn(AuditEvent, 'create').mockRejectedValueOnce(new Error('audit unavailable') as never);
+    await expect(repository.setRoleSafely(String(user._id), 'operator', { actorId: 'actor', requestId: 'failure' })).rejects.toThrow('audit unavailable');
+    expect((await User.findById(user._id).lean())?.role).toBe('viewer');
   });
 });

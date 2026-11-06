@@ -18,7 +18,6 @@ import { createAlertsRouter } from './routes/alerts.js';
 import { createAuditRouter } from './routes/audit.js';
 import { RuleService } from './monitoring/rule-service.js';
 import { AlertService } from './monitoring/alert-service.js';
-import { AuditService } from './monitoring/audit-service.js';
 import { createWatchlistRouter } from './routes/watchlist.js';
 import type { WatchlistService } from './monitoring/watchlist-service.js';
 
@@ -32,7 +31,7 @@ export interface AppDependencies {
     tokens?: TokenService;
   };
   marketData?: MarketDataApi;
-  monitoring?: { rules?: RuleService; alerts?: AlertService; watchlist?: WatchlistService; audit?: AuditService };
+  monitoring?: { rules?: RuleService; alerts?: AlertService; watchlist?: WatchlistService };
 }
 
 export function createApp(dependencies: AppDependencies): Express {
@@ -54,7 +53,7 @@ export function createApp(dependencies: AppDependencies): Express {
       webOrigin: dependencies.config.webOrigin,
     }));
     const resolveRole = async (id: string) => (await dependencies.auth!.repository.findUserById(id))?.role ?? null;
-    app.use('/api/admin/users', requireUser(tokens), createAdminUsersRouter(dependencies.auth.repository, dependencies.monitoring?.audit));
+    app.use('/api/admin/users', requireUser(tokens), createAdminUsersRouter(dependencies.auth.repository));
     if (dependencies.marketData) app.use('/api', requireUser(tokens), createMarketDataRouter(dependencies.marketData));
     if (dependencies.monitoring) {
       if (dependencies.monitoring.watchlist) app.use('/api/watchlist', requireUser(tokens), createWatchlistRouter(dependencies.monitoring.watchlist, resolveRole));

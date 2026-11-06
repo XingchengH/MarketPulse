@@ -1,6 +1,7 @@
 import { Watchlist } from '../models/watchlist.js';
 import type { MarketDataProvider } from '../market-data/provider.js';
 import { AuditEvent } from '../models/audit-event.js';
+import { AuthInvariant } from '../models/auth-invariant.js';
 import { redactAuditValue, type AuditInput } from './audit-service.js';
 
 export interface WatchlistItem {
@@ -13,7 +14,9 @@ export interface WatchlistItem {
 
 export interface WatchlistRepository {
   list(): Promise<WatchlistItem[]>;
-  replace(symbols: string[], audit: AuditInput): Promise<WatchlistItem[]>;
+  mutate(mutation: { type: 'add' | 'remove'; symbol: string; audit: Omit<AuditInput, 'action' | 'resourceType' | 'resourceId' | 'before' | 'after'> }): Promise<
+    { status: 'updated'; watchlist: WatchlistItem[]; before: string[] } | { status: 'duplicate' | 'not_found' | 'empty' }
+  >;
 }
 
 export interface AssetLookup {
@@ -37,27 +40,23 @@ export class WatchlistService {
 
   async add(input: string, context: WatchlistMutationContext): Promise<WatchlistResult> {
     const symbol = input.trim().toUpperCase();
-    const current = await this.repository.list();
-    if (current.some(item => item.symbol === symbol)) return { status: 'duplicate' };
     let asset: Awaited<ReturnType<AssetLookup['lookupAsset']>>;
     try { asset = await this.provider.lookupAsset(symbol); }
-    catch { return { status: 'provider_unavailable', watchlist: current }; }
+    catch { return { status: 'provider_unavailable', watchlist: await this.repository.list() }; }
     if (!asset || !asset.tradable) return { status: 'not_tradable' };
-    const symbols = [...current.map(item => item.symbol), asset.symbol.toUpperCase()];
-    return this.persistAndReplace(symbols, { actorId: context.actorId, requestId: context.requestId, action: 'watchlist.symbol_added', resourceType: 'watchlist', resourceId: asset.symbol.toUpperCase(), before: { symbols: current.map(item => item.symbol) }, after: { symbols } });
+    return this.mutateAndReplace('add', asset.symbol.toUpperCase(), context);
   }
 
   async remove(input: string, context: WatchlistMutationContext): Promise<WatchlistResult> {
     const symbol = input.trim().toUpperCase();
-    const current = await this.repository.list();
-    if (!current.some(item => item.symbol === symbol)) return { status: 'not_found' };
-    if (current.length === 1) return { status: 'empty' };
-    const symbols = current.filter(item => item.symbol !== symbol).map(item => item.symbol);
-    return this.persistAndReplace(symbols, { actorId: context.actorId, requestId: context.requestId, action: 'watchlist.symbol_removed', resourceType: 'watchlist', resourceId: symbol, before: { symbols: current.map(item => item.symbol) }, after: { symbols } });
+    return this.mutateAndReplace('remove', symbol, context);
   }
 
-  private async persistAndReplace(symbols: string[], audit: AuditInput): Promise<WatchlistResult> {
-    const watchlist = await this.repository.replace(symbols, audit);
+  private async mutateAndReplace(type: 'add' | 'remove', symbol: string, context: WatchlistMutationContext): Promise<WatchlistResult> {
+    const result = await this.repository.mutate({ type, symbol, audit: context });
+    if (result.status !== 'updated') return result;
+    const watchlist = result.watchlist;
+    const symbols = watchlist.map(item => item.symbol);
     this.onChanged(symbols);
     try {
       await this.provider.replaceSubscriptions(symbols);
@@ -73,12 +72,25 @@ export const mongooseWatchlistRepository: WatchlistRepository = {
     const values = await Watchlist.find({ enabled: true }).sort({ symbol: 1 }).lean();
     return values.map(value => ({ id: String(value._id), symbol: value.symbol, enabled: value.enabled, createdAt: value.createdAt, updatedAt: value.updatedAt }));
   },
-  async replace(symbols, audit) {
+  async mutate(mutation) {
+    await AuthInvariant.updateOne({ key: 'watchlist' }, { $setOnInsert: { revision: 0 } }, { upsert: true });
+    let result: Awaited<ReturnType<WatchlistRepository['mutate']>> | undefined;
     await Watchlist.db.transaction(async session => {
+      await AuthInvariant.updateOne({ key: 'watchlist' }, { $inc: { revision: 1 } }, { session });
+      const current = await Watchlist.find({ enabled: true }).sort({ symbol: 1 }).session(session).lean();
+      const before = current.map(item => item.symbol);
+      if (mutation.type === 'add' && before.includes(mutation.symbol)) { result = { status: 'duplicate' }; return; }
+      if (mutation.type === 'remove' && !before.includes(mutation.symbol)) { result = { status: 'not_found' }; return; }
+      if (mutation.type === 'remove' && before.length === 1) { result = { status: 'empty' }; return; }
+      const symbols = mutation.type === 'add' ? [...before, mutation.symbol].sort() : before.filter(symbol => symbol !== mutation.symbol);
       await Watchlist.updateMany({}, { $set: { enabled: false } }, { session });
       for (const symbol of symbols) await Watchlist.updateOne({ symbol }, { $set: { enabled: true }, $setOnInsert: { symbol } }, { upsert: true, session });
+      const audit = { ...mutation.audit, action: `watchlist.symbol_${mutation.type === 'add' ? 'added' : 'removed'}`, resourceType: 'watchlist', resourceId: mutation.symbol, before: { symbols: before }, after: { symbols } };
       await AuditEvent.create([{ ...audit, before: redactAuditValue(audit.before), after: redactAuditValue(audit.after), createdAt: audit.createdAt ?? new Date() }], { session });
+      const committed = await Watchlist.find({ enabled: true }).sort({ symbol: 1 }).session(session).lean();
+      result = { status: 'updated', before, watchlist: committed.map(value => ({ id: String(value._id), symbol: value.symbol, enabled: value.enabled, createdAt: value.createdAt, updatedAt: value.updatedAt })) };
     });
-    return this.list();
+    if (!result) throw new Error('Watchlist transaction completed without a result');
+    return result;
   },
 };

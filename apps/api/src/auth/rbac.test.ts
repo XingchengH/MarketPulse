@@ -7,6 +7,8 @@ import { requireRole, requireUser, type CurrentRoleResolver } from './middleware
 import { createTokenService } from './tokens.js';
 
 const tokens = createTokenService('rbac-test-access-secret', 'rbac-test-refresh-pepper');
+const targetId = '507f1f77bcf86cd799439011';
+const secondAdminId = '507f1f77bcf86cd799439012';
 
 async function cookie(role: Role) {
   const value = await tokens.signAccessToken({ id: `${role}-1`, email: `${role}@example.com`, name: role, role });
@@ -39,11 +41,11 @@ describe('RBAC', () => {
     for (const [role, expected] of [['viewer', 403], ['operator', 403], ['admin', 200]] as const) {
       const app = appFor(role, repository);
       expect((await request(app).get('/api/admin/users').set('Cookie', await cookie(role))).status).toBe(expected);
-      expect((await request(app).patch('/api/admin/users/target/role').set('Cookie', await cookie(role)).send({ role: 'operator' })).status).toBe(expected);
+      expect((await request(app).patch(`/api/admin/users/${targetId}/role`).set('Cookie', await cookie(role)).send({ role: 'operator' })).status).toBe(expected);
     }
     const anonymous = appFor('viewer', repository);
     expect((await request(anonymous).get('/api/admin/users')).status).toBe(401);
-    expect((await request(anonymous).patch('/api/admin/users/target/role').send({ role: 'operator' })).status).toBe(401);
+    expect((await request(anonymous).patch(`/api/admin/users/${targetId}/role`).send({ role: 'operator' })).status).toBe(401);
   });
 
   it('prevents demoting the final admin', async () => {
@@ -52,16 +54,16 @@ describe('RBAC', () => {
       findUserById: async (id) => ({ id, email: `${id}@example.com`, name: id, role: 'admin' }),
       setRoleSafely: async () => ({ status: 'final_admin' }),
     };
-    const response = await request(appFor('admin', repository)).patch('/api/admin/users/admin-1/role').set('Cookie', await cookie('admin')).send({ role: 'viewer' });
+    const response = await request(appFor('admin', repository)).patch(`/api/admin/users/${targetId}/role`).set('Cookie', await cookie('admin')).send({ role: 'viewer' });
     expect(response.status).toBe(409);
   });
 
   it('serializes concurrent admin demotions so one admin always remains', async () => {
-    const roles = new Map([['admin-1', 'admin' as Role], ['admin-2', 'admin' as Role]]);
+    const roles = new Map([[targetId, 'admin' as Role], [secondAdminId, 'admin' as Role]]);
     const repository: AdminUserRepository = {
       listUsers: async () => [],
       findUserById: async (id) => {
-        const role = roles.get(id);
+        const role = id === 'admin-1' ? roles.get(targetId) : roles.get(id);
         return role ? { id, email: `${id}@example.com`, name: id, role } : null;
       },
       async setRoleSafely(id, role) {
@@ -74,8 +76,8 @@ describe('RBAC', () => {
     };
     const app = appFor('admin', repository);
     const responses = await Promise.all([
-      request(app).patch('/api/admin/users/admin-1/role').set('Cookie', await cookie('admin')).send({ role: 'viewer' }),
-      request(app).patch('/api/admin/users/admin-2/role').set('Cookie', await cookie('admin')).send({ role: 'viewer' }),
+      request(app).patch(`/api/admin/users/${targetId}/role`).set('Cookie', await cookie('admin')).send({ role: 'viewer' }),
+      request(app).patch(`/api/admin/users/${secondAdminId}/role`).set('Cookie', await cookie('admin')).send({ role: 'viewer' }),
     ]);
     // The second request can be denied at fresh-role authorization before it reaches the invariant.
     expect(responses.map((response) => response.status).sort()).toEqual([200, 403]);

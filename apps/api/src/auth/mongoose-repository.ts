@@ -2,6 +2,7 @@ import type { Role } from '@marketpulse/contracts';
 import { RefreshToken } from '../models/refresh-token.js';
 import { User } from '../models/user.js';
 import { AuthInvariant } from '../models/auth-invariant.js';
+import { AuditEvent } from '../models/audit-event.js';
 import type { AdminUser, AdminUserRepository } from '../routes/admin-users.js';
 import type { AuthRepository, PublicUser, RefreshRecord } from '../routes/auth.js';
 import type { GoogleProfile } from './google-provider.js';
@@ -49,7 +50,7 @@ export class MongooseAuthRepository implements AuthRepository, AdminUserReposito
     const users = await User.find().select('email name role lastLoginAt').sort({ email: 1 }).lean();
     return users.map((user) => adminUser(user as never));
   }
-  async setRoleSafely(id: string, role: Role): Promise<
+  async setRoleSafely(id: string, role: Role, audit: { actorId: string; requestId: string }): Promise<
     { status: 'updated'; user: AdminUser; previousRole: Role } | { status: 'not_found' } | { status: 'final_admin' }
   > {
     return User.db.transaction(async (session) => {
@@ -61,6 +62,7 @@ export class MongooseAuthRepository implements AuthRepository, AdminUserReposito
         return { status: 'final_admin' as const };
       }
       const user = await User.findByIdAndUpdate(id, { $set: { role } }, { returnDocument: 'after', runValidators: true, session }).lean();
+      await AuditEvent.create([{ actorId: audit.actorId, action: 'user.role_changed', resourceType: 'user', resourceId: id, requestId: audit.requestId, before: { role: current.role }, after: { role }, createdAt: new Date() }], { session });
       return { status: 'updated' as const, user: adminUser(user as never), previousRole: current.role };
     });
   }
