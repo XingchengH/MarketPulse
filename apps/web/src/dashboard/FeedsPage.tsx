@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { useOverviewQuery, useSymbolsQuery, type SymbolSnapshot } from '../api';
 import { StatusBadge } from '../components/StatusBadge';
 import { FeedDrawer } from './FeedDrawer';
-function health(snapshot: SymbolSnapshot) { if (!snapshot.lastEventAt) return 'unavailable'; if (snapshot.marketClock && !snapshot.marketClock.isOpen) return 'healthy'; if (snapshot.providerErrors > 0 || snapshot.reconnects > 0) return 'degraded'; return 'healthy'; }
+function health(snapshot: SymbolSnapshot) { if (!snapshot.lastEventAt || snapshot.marketClockStatus === 'unavailable') return 'unavailable'; if (snapshot.marketClockStatus === 'degraded') return 'degraded'; if (snapshot.marketClock && !snapshot.marketClock.isOpen) return 'healthy'; if (snapshot.providerErrors > 0 || snapshot.reconnects > 0) return 'degraded'; return 'healthy'; }
 export function FeedsPage({ compact = false }: { compact?: boolean }) {
   const symbols = useSymbolsQuery(), overview = useOverviewQuery(); const [selectedSymbol, setSelectedSymbol] = useState<string>();
   if (symbols.isLoading) return <p className="loading-state">Loading symbols…</p>;

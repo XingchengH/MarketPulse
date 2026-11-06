@@ -39,7 +39,42 @@ describe('service health', () => {
     expect((await request(app).get('/health/live')).body).toEqual({ status: 'live' });
     const readiness = await request(app).get('/health/ready');
     expect(readiness.status).toBe(503);
-    expect(readiness.body).toEqual({ status: 'not_ready', services: { mongodb: 'unavailable' } });
+    expect(readiness.body).toEqual({ status: 'not_ready', services: { mongodb: 'unavailable', configuration: 'ready', alpaca: 'unconfigured' } });
+    expect((await request(app).get('/api/overview')).status).toBe(503);
+  });
+
+  it('keeps diagnostics reachable through database startup failure and becomes ready after recovery', async () => {
+    let databaseReady = false;
+    const config = { ...unconfigured.config, alpaca: { apiKey: 'key', apiSecret: 'secret' } };
+    const app = createApp({ config, database: { isReady: () => databaseReady }, providerState: () => 'connected' });
+    expect((await request(app).get('/health/live')).status).toBe(200);
+    expect((await request(app).get('/api/setup/status')).body.services.mongodb).toBe('unavailable');
+    expect((await request(app).get('/api/overview')).status).toBe(503);
+    databaseReady = true;
+    expect((await request(app).get('/health/ready')).status).toBe(200);
+    expect((await request(app).get('/api/setup/status')).body.services.mongodb).toBe('ready');
+  });
+
+  it.each([
+    ['connecting', 503], ['reconnecting', 503], ['auth_rejected', 503], ['rate_limited', 503], ['unavailable', 503],
+    ['connected', 200], ['market_closed', 200], ['outside_session', 200],
+  ] as const)('maps provider state %s to readiness %i', async (state, expected) => {
+    const config = {
+      ...unconfigured.config,
+      nodeEnv: 'production' as const,
+      google: { clientId: 'client', clientSecret: 'secret', redirectUri: 'https://example.com/callback' },
+      alpaca: { apiKey: 'key', apiSecret: 'secret' },
+      accessTokenSecret: 'a'.repeat(32), refreshTokenPepper: 'b'.repeat(32),
+    };
+    const response = await request(createApp({ config, database: { isReady: () => true }, providerState: () => state })).get('/health/ready');
+    expect(response.status).toBe(expected);
+    expect(response.body.services.alpaca).toBe(state);
+  });
+
+  it('rejects readiness when required production configuration is absent', async () => {
+    const response = await request(createApp({ ...unconfigured, config: { ...unconfigured.config, nodeEnv: 'production' } })).get('/health/ready');
+    expect(response.status).toBe(503);
+    expect(response.body.services.configuration).toBe('missing');
   });
 
   it('returns request-correlated JSON errors', async () => {

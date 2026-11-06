@@ -39,4 +39,15 @@ describe('MonitoringRuntime', () => {
     const runtime = new MonitoringRuntime({ snapshot: symbol => aggregator.snapshotWithMarketState(symbol), symbols: () => ['AAPL'] }, new MonitoringEvaluator({ upsertViolation: async value => { opened.push(value.id); }, recover: async () => {} }), { enabled: async () => [rule] }, { cadenceMs: 1_000, now: () => now });
     now = 60_000; await runtime.tick(); expect(opened).toEqual([]);
   });
+  it('suppresses only stale-data rules when market state is unknown and keeps other evaluation operational', async () => {
+    const opened: string[] = [];
+    const rules = [
+      { id: 'stale', name: 'stale', scope: { kind: 'all' as const }, metric: 'lastEventAgeSeconds' as const, operator: 'gt' as const, threshold: 5, durationSeconds: 0, severity: 'critical' as const, enabled: true, version: 1, creatorId: 'u' },
+      { id: 'errors', name: 'errors', scope: { kind: 'all' as const }, metric: 'providerErrors' as const, operator: 'gt' as const, threshold: 0, durationSeconds: 0, severity: 'warning' as const, enabled: true, version: 1, creatorId: 'u' },
+    ];
+    const snapshot = { observedLatency: { latest: 0 }, receivedMessagesPerSecond: 0, staleDurationMs: 60_000, providerErrors: 1, reconnects: 0, marketClockStatus: 'unavailable' as const };
+    const runtime = new MonitoringRuntime({ snapshot: async () => snapshot, symbols: () => ['AAPL'] }, new MonitoringEvaluator({ upsertViolation: async value => { opened.push(value.id); }, recover: async () => {} }), { enabled: async () => rules }, { cadenceMs: 1, now: () => 10 });
+    await runtime.tick();
+    expect(opened).toEqual(['errors']);
+  });
 });

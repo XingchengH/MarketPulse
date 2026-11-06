@@ -2,11 +2,11 @@ import { createApi } from '@reduxjs/toolkit/query/react';
 import type { BaseQueryFn, FetchArgs } from '@reduxjs/toolkit/query';
 import type { Role, RuleInput } from '@marketpulse/contracts';
 
-export type ServiceState = 'ready' | 'missing' | 'unavailable';
+export type ServiceState = 'ready' | 'missing' | 'unavailable' | 'unconfigured' | 'connecting' | 'connected' | 'reconnecting' | 'market_closed' | 'outside_session' | 'auth_rejected' | 'rate_limited';
 export interface SetupStatus { configured: boolean; services: Record<'mongodb' | 'googleOAuth' | 'alpaca' | 'tokens', ServiceState> }
 export interface User { id: string; email: string; name: string; picture?: string; role: Role; lastLoginAt?: string }
 export interface Overview { provider: string; providerState: string; symbols: string[] }
-export interface SymbolSnapshot { symbol: string; feed: string | null; latestTrade?: { price: number }; latestQuote?: { bid: number; ask: number }; spread?: number; receivedMessagesPerSecond: number; lastEventAt: string | null; observedLatency: { latest: number; p95: number }; staleDurationMs: number; providerErrors: number; reconnects: number; marketClock?: { isOpen: boolean; session?: string } }
+export interface SymbolSnapshot { symbol: string; feed: string | null; latestTrade?: { price: number }; latestQuote?: { bid: number; ask: number }; spread?: number; receivedMessagesPerSecond: number; lastEventAt: string | null; observedLatency: { latest: number; p95: number }; staleDurationMs: number; providerErrors: number; reconnects: number; marketClock?: { isOpen: boolean; status?: 'current' | 'degraded'; staleAgeMs?: number } | null; marketClockStatus?: 'current' | 'degraded' | 'unavailable' }
 export interface WatchlistItem { _id: string; symbol: string; enabled: boolean; createdAt: string; updatedAt: string }
 export interface Alert { _id: string; symbol: string; metric: string; severity: string; status: string; value: number; threshold: number; lastObservedAt: string; acknowledgedAt?: string; acknowledgedBy?: string }
 export interface Rule extends RuleInput { _id: string; version: number; updatedAt: string }

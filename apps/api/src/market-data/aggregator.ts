@@ -28,6 +28,14 @@ export class MarketDataAggregator {
     state.messages = state.messages.filter(time => time > now - 1_000 && time <= now);
     return { symbol, feed: state.feed ?? null, latestTrade: state.latestTrade && { price: state.latestTrade.price, size: state.latestTrade.size, providerTimestamp: state.latestTrade.providerTimestamp }, latestQuote: state.latestQuote && { bid: state.latestQuote.bid, ask: state.latestQuote.ask, bidSize: state.latestQuote.bidSize, askSize: state.latestQuote.askSize, providerTimestamp: state.latestQuote.providerTimestamp }, spread: state.latestQuote ? state.latestQuote.ask - state.latestQuote.bid : undefined, receivedMessagesPerSecond: state.messages.length, lastEventAt: state.lastEventAt ? new Date(state.lastEventAt).toISOString() : null, observedLatency: { latest: state.latency.latest(), p95: state.latency.p95() }, providerErrors: state.providerErrors, reconnects: state.reconnects, staleDurationMs: state.lastEventAt ? Math.max(0, now - state.lastEventAt) : 0 };
   }
-  async snapshotWithMarketState(symbol: string) { const value = this.snapshot(symbol); const clock = await this.options.marketClock?.get(); return { ...value, staleDurationMs: clock?.isOpen ? value.staleDurationMs : 0, marketClock: clock }; }
+  async snapshotWithMarketState(symbol: string) {
+    const value = this.snapshot(symbol);
+    try {
+      const clock = await this.options.marketClock?.get();
+      return { ...value, staleDurationMs: clock?.isOpen ? value.staleDurationMs : 0, marketClock: clock, marketClockStatus: clock?.status ?? 'current' };
+    } catch {
+      return { ...value, marketClock: null, marketClockStatus: 'unavailable' as const };
+    }
+  }
   symbols() { return [...this.states.keys()].sort(); }
 }

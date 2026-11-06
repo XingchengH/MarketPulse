@@ -64,6 +64,23 @@ describe('Alpaca market data', () => {
     await expect(Promise.all([first, second])).resolves.toHaveLength(2);
   });
 
+  it('preserves snapshots with explicit unknown clock state on an initial clock failure', async () => {
+    const aggregator = new MarketDataAggregator({ marketClock: new MarketClockCache(async () => { throw new Error('clock unavailable'); }) });
+    await expect(aggregator.snapshotWithMarketState('AAPL')).resolves.toMatchObject({ symbol: 'AAPL', marketClock: null, marketClockStatus: 'unavailable' });
+  });
+
+  it('uses a bounded last-known clock and surfaces degradation after a refresh failure', async () => {
+    let now = 0; let fail = false;
+    const clock = new MarketClockCache(async () => {
+      if (fail) throw new Error('clock unavailable');
+      return { isOpen: false, nextOpen: 'a', nextClose: 'b' };
+    }, { now: () => now, ttlMs: 10, staleIfErrorMs: 100 });
+    await clock.get(); fail = true; now = 11;
+    await expect(clock.get()).resolves.toMatchObject({ isOpen: false, status: 'degraded', staleAgeMs: 11 });
+    now = 101;
+    await expect(clock.get()).rejects.toThrow('clock unavailable');
+  });
+
   it('handles Alpaca status and subscription control acknowledgements', async () => {
     const sent: string[] = [];
     const listeners = new Map<string, (event: { data?: unknown }) => void>();

@@ -5,7 +5,14 @@ export type OperationalEvent =
   | { type: 'error'; message: string }
   | { type: 'reconnect' };
 
-export interface MarketClock { isOpen: boolean; nextOpen: string; nextClose: string }
+export interface MarketClock {
+  isOpen: boolean;
+  nextOpen: string;
+  nextClose: string;
+  status?: 'current' | 'degraded';
+  fetchedAt?: string;
+  staleAgeMs?: number;
+}
 
 export interface MarketDataProvider {
   readonly name: 'alpaca';

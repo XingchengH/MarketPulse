@@ -59,7 +59,7 @@ export class AlpacaProvider implements MarketDataProvider {
           this.transition('connected');
           continue;
         }
-        if (message.T === 'error') { const code = Number(message.code); this.transition(code === 429 || code === 407 ? 'rate_limited' : 'unavailable'); for (const listener of this.operational) listener({ type: 'error', message: `Alpaca stream rejected request (${code || 'unknown'})` }); this.socket?.close(); continue; }
+        if (message.T === 'error') { const code = Number(message.code); this.transition(code === 401 || code === 403 ? 'auth_rejected' : code === 429 || code === 407 ? 'rate_limited' : 'unavailable'); for (const listener of this.operational) listener({ type: 'error', message: `Alpaca stream rejected request (${code || 'unknown'})` }); this.socket?.close(); continue; }
         const event = normalizeAlpacaMessage(message); if (event) for (const listener of this.events) listener(event);
       }
     } catch { for (const listener of this.operational) listener({ type: 'error', message: 'Invalid Alpaca stream message' }); }
@@ -77,7 +77,18 @@ export class AlpacaProvider implements MarketDataProvider {
   async disconnect(): Promise<void> { this.stopped = true; this.cancelReconnect(); this.generation += 1; const socket = this.socket; this.socket = undefined; socket?.close(); this.transition(this.options.apiKey && this.options.apiSecret ? 'unavailable' : 'unconfigured'); }
   onEvent(listener: (event: MarketEvent) => void) { this.events.add(listener); return () => this.events.delete(listener); }
   onOperationalEvent(listener: (event: OperationalEvent) => void) { this.operational.add(listener); return () => this.operational.delete(listener); }
-  async getMarketClock(): Promise<MarketClock> { const clock = await this.clock.get(); if (!clock.isOpen) this.transition('market_closed'); else if (this.providerState === 'market_closed') this.transition('connected'); return clock; }
+  async getMarketClock(): Promise<MarketClock> {
+    try {
+      const clock = await this.clock.get();
+      if (clock.status === 'degraded') this.transition('unavailable');
+      else if (!clock.isOpen) this.transition('market_closed');
+      else if (this.providerState === 'market_closed' || this.providerState === 'unavailable') this.transition('connected');
+      return clock;
+    } catch (error) {
+      this.transition('unavailable');
+      throw error;
+    }
+  }
   async lookupAsset(symbol: string): Promise<{ symbol: string; tradable: boolean } | null> {
     const response = await (this.options.fetch ?? fetch)(`https://api.alpaca.markets/v2/assets/${encodeURIComponent(symbol.toUpperCase())}`, { headers: { 'APCA-API-KEY-ID': this.options.apiKey, 'APCA-API-SECRET-KEY': this.options.apiSecret } });
     if (response.status === 404) return null;

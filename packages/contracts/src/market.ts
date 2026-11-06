@@ -7,6 +7,8 @@ export const providerStateSchema = z.enum([
   'connected',
   'reconnecting',
   'market_closed',
+  'outside_session',
+  'auth_rejected',
   'rate_limited',
   'unavailable',
 ]);
