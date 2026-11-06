@@ -16,4 +16,5 @@ export interface MarketDataProvider {
   onEvent(listener: (event: MarketEvent) => void): () => void;
   onOperationalEvent(listener: (event: OperationalEvent) => void): () => void;
   getMarketClock(): Promise<MarketClock>;
+  lookupAsset(symbol: string): Promise<{ symbol: string; tradable: boolean } | null>;
 }

@@ -2,19 +2,20 @@ import type { Role } from '@marketpulse/contracts';
 import { RefreshToken } from '../models/refresh-token.js';
 import { User } from '../models/user.js';
 import { AuthInvariant } from '../models/auth-invariant.js';
-import type { AdminUserRepository } from '../routes/admin-users.js';
+import type { AdminUser, AdminUserRepository } from '../routes/admin-users.js';
 import type { AuthRepository, PublicUser, RefreshRecord } from '../routes/auth.js';
 import type { GoogleProfile } from './google-provider.js';
 
-const publicUser = (value: { _id: unknown; email: string; name: string; picture?: string; role: Role }): PublicUser => ({
-  id: String(value._id), email: value.email, name: value.name, picture: value.picture, role: value.role,
+const publicUser = (value: { _id: unknown; email: string; name: string; picture?: string; role: Role; lastLoginAt?: Date }): PublicUser => ({
+  id: String(value._id), email: value.email, name: value.name, picture: value.picture, role: value.role, lastLoginAt: value.lastLoginAt,
 });
+const adminUser = (value: { _id: unknown; email: string; name: string; role: Role; lastLoginAt?: Date }): AdminUser => ({ id: String(value._id), email: value.email, name: value.name, role: value.role, lastLoginAt: value.lastLoginAt });
 
 export class MongooseAuthRepository implements AuthRepository, AdminUserRepository {
   async upsertGoogleUser(profile: GoogleProfile): Promise<PublicUser> {
     const user = await User.findOneAndUpdate(
       { googleSubject: profile.subject },
-      { $set: { email: profile.email, name: profile.name, picture: profile.picture }, $setOnInsert: { googleSubject: profile.subject, role: 'viewer' } },
+      { $set: { email: profile.email, name: profile.name, picture: profile.picture, lastLoginAt: new Date() }, $setOnInsert: { googleSubject: profile.subject, role: 'viewer' } },
       { upsert: true, returnDocument: 'after', runValidators: true },
     ).lean();
     return publicUser(user as never);
@@ -44,12 +45,12 @@ export class MongooseAuthRepository implements AuthRepository, AdminUserReposito
   async revokeFamily(familyId: string): Promise<void> {
     await RefreshToken.updateMany({ familyId, revokedAt: { $exists: false } }, { $set: { revokedAt: new Date() } });
   }
-  async listUsers(): Promise<PublicUser[]> {
-    const users = await User.find().sort({ email: 1 }).lean();
-    return users.map((user) => publicUser(user as never));
+  async listUsers(): Promise<AdminUser[]> {
+    const users = await User.find().select('email name role lastLoginAt').sort({ email: 1 }).lean();
+    return users.map((user) => adminUser(user as never));
   }
   async setRoleSafely(id: string, role: Role): Promise<
-    { status: 'updated'; user: PublicUser } | { status: 'not_found' } | { status: 'final_admin' }
+    { status: 'updated'; user: AdminUser } | { status: 'not_found' } | { status: 'final_admin' }
   > {
     return User.db.transaction(async (session) => {
       // Every role mutation writes the same record, preventing snapshot-isolation write skew.
@@ -60,7 +61,7 @@ export class MongooseAuthRepository implements AuthRepository, AdminUserReposito
         return { status: 'final_admin' as const };
       }
       const user = await User.findByIdAndUpdate(id, { $set: { role } }, { returnDocument: 'after', runValidators: true, session }).lean();
-      return { status: 'updated' as const, user: publicUser(user as never) };
+      return { status: 'updated' as const, user: adminUser(user as never) };
     });
   }
 }

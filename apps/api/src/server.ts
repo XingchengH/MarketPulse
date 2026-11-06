@@ -17,6 +17,8 @@ import { RuleService } from './monitoring/rule-service.js';
 import { createTokenService } from './auth/tokens.js';
 import { createRealtimeServer } from './realtime/socket-server.js';
 import { RealtimePublisher } from './realtime/publisher.js';
+import { WatchlistService, mongooseWatchlistRepository } from './monitoring/watchlist-service.js';
+import { AuditService } from './monitoring/audit-service.js';
 
 const config = loadConfig();
 const database = connectDatabase(config.mongodbUri);
@@ -53,6 +55,7 @@ const configured = Boolean(config.alpaca.apiKey && config.alpaca.apiSecret);
 await bootstrapDefaultWatchlist();
 const symbols = (await Watchlist.find({ enabled: true }).select('symbol').lean()) as Array<{ symbol: string }>;
 subscribedSymbols = symbols.map(item => item.symbol);
+const watchlistService = new WatchlistService(mongooseWatchlistRepository, marketProvider, next => { subscribedSymbols = next; publisher?.overview({ provider: marketProvider.name, providerState: marketProvider.state(), symbols: next }); });
 monitoring.start();
 if (configured) {
   await marketProvider.connect(subscribedSymbols);
@@ -63,7 +66,7 @@ const marketData = {
   symbol: async (symbol: string) => subscribedSymbols.includes(symbol) ? aggregator.snapshotWithMarketState(symbol) : null,
   metrics: async ({ symbol, from, to }: { symbol: string; from: Date; to: Date }) => MetricBucket.find({ symbol, bucketStart: { $gte: from, $lte: to } }).sort({ bucketStart: 1 }).lean(),
 };
-const app = createApp({ config, database, auth: { provider, repository, tokens }, marketData, monitoring: { rules: ruleService, alerts: alertService } });
+const app = createApp({ config, database, auth: { provider, repository, tokens }, marketData, monitoring: { rules: ruleService, alerts: alertService, watchlist: watchlistService, audit: new AuditService() } });
 const server = createServer(app);
 const realtime = createRealtimeServer(server, { tokens, findCurrentUser: id => repository.findUserById(id), webOrigin: config.webOrigin });
 publisher = new RealtimePublisher(realtime);

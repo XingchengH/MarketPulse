@@ -18,6 +18,9 @@ import { createAlertsRouter } from './routes/alerts.js';
 import { createAuditRouter } from './routes/audit.js';
 import { RuleService } from './monitoring/rule-service.js';
 import { AlertService } from './monitoring/alert-service.js';
+import { AuditService } from './monitoring/audit-service.js';
+import { createWatchlistRouter } from './routes/watchlist.js';
+import type { WatchlistService } from './monitoring/watchlist-service.js';
 
 export interface AppDependencies {
   config: AppConfig;
@@ -29,7 +32,7 @@ export interface AppDependencies {
     tokens?: TokenService;
   };
   marketData?: MarketDataApi;
-  monitoring?: { rules?: RuleService; alerts?: AlertService };
+  monitoring?: { rules?: RuleService; alerts?: AlertService; watchlist?: WatchlistService; audit?: AuditService };
 }
 
 export function createApp(dependencies: AppDependencies): Express {
@@ -50,10 +53,11 @@ export function createApp(dependencies: AppDependencies): Express {
       nodeEnv: dependencies.config.nodeEnv,
       webOrigin: dependencies.config.webOrigin,
     }));
-    app.use('/api/admin/users', requireUser(tokens), createAdminUsersRouter(dependencies.auth.repository));
+    const resolveRole = async (id: string) => (await dependencies.auth!.repository.findUserById(id))?.role ?? null;
+    app.use('/api/admin/users', requireUser(tokens), createAdminUsersRouter(dependencies.auth.repository, dependencies.monitoring?.audit));
     if (dependencies.marketData) app.use('/api', requireUser(tokens), createMarketDataRouter(dependencies.marketData));
     if (dependencies.monitoring) {
-      const resolveRole = async (id: string) => (await dependencies.auth!.repository.findUserById(id))?.role ?? null;
+      if (dependencies.monitoring.watchlist) app.use('/api/watchlist', requireUser(tokens), createWatchlistRouter(dependencies.monitoring.watchlist, resolveRole));
       app.use('/api/rules', requireUser(tokens), createRulesRouter(dependencies.monitoring.rules ?? new RuleService(), resolveRole));
       app.use('/api/alerts', requireUser(tokens), createAlertsRouter(resolveRole, dependencies.monitoring.alerts));
       app.use('/api/audit', requireUser(tokens), createAuditRouter(resolveRole));

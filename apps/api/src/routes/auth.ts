@@ -6,7 +6,7 @@ import { clearAuthCookies, clearStateCookie, cookieNames, readCookie, setAuthCoo
 import { requireUser } from '../auth/middleware.js';
 import type { TokenService } from '../auth/tokens.js';
 
-export interface PublicUser { id: string; email: string; name: string; picture?: string; role: Role }
+export interface PublicUser { id: string; email: string; name: string; picture?: string; role: Role; lastLoginAt?: Date }
 export interface RefreshRecord { tokenHash: string; userId: string; familyId: string; expiresAt: Date; purgeAt: Date; revokedAt?: Date; replacedByHash?: string }
 export interface AuthRepository {
   upsertGoogleUser(profile: GoogleProfile): Promise<PublicUser>;

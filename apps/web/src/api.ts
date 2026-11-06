@@ -4,7 +4,7 @@ import type { Role, RuleInput } from '@marketpulse/contracts';
 
 export type ServiceState = 'ready' | 'missing' | 'unavailable';
 export interface SetupStatus { configured: boolean; services: Record<'mongodb' | 'googleOAuth' | 'alpaca' | 'tokens', ServiceState> }
-export interface User { id: string; email: string; name: string; picture?: string; role: Role }
+export interface User { id: string; email: string; name: string; picture?: string; role: Role; lastLoginAt?: string }
 export interface Overview { provider: string; providerState: string; symbols: string[] }
 export interface SymbolSnapshot { symbol: string; feed: string | null; latestTrade?: { price: number }; latestQuote?: { bid: number; ask: number }; spread?: number; receivedMessagesPerSecond: number; lastEventAt: string | null; observedLatency: { latest: number; p95: number }; staleDurationMs: number; providerErrors: number; reconnects: number; marketClock?: { isOpen: boolean; session?: string } }
 export interface WatchlistItem { _id: string; symbol: string; enabled: boolean; createdAt: string; updatedAt: string }
@@ -36,6 +36,8 @@ export const api = createApi({
     symbols: build.query<{ symbols: SymbolSnapshot[] }, void>({ query: () => '/symbols', providesTags: ['Symbols'] }),
     symbol: build.query<SymbolSnapshot, string>({ query: symbol => `/symbols/${symbol}`, providesTags: ['Symbols'] }),
     watchlist: build.query<{ watchlist: WatchlistItem[] }, void>({ query: () => '/watchlist', providesTags: ['Watchlist'] }),
+    addWatchlistSymbol: build.mutation<{ watchlist: WatchlistItem[] }, string>({ query: symbol => ({ url: '/watchlist', method: 'POST', body: { symbol } }), invalidatesTags: ['Watchlist', 'Overview', 'Symbols'] }),
+    removeWatchlistSymbol: build.mutation<{ watchlist: WatchlistItem[] }, string>({ query: symbol => ({ url: `/watchlist/${encodeURIComponent(symbol)}`, method: 'DELETE' }), invalidatesTags: ['Watchlist', 'Overview', 'Symbols'] }),
     users: build.query<{ users: User[] }, void>({ query: () => '/admin/users', providesTags: ['Users'] }),
     updateUserRole: build.mutation<{ user: User }, { id: string; role: Role }>({ query: ({ id, role }) => ({ url: `/admin/users/${id}/role`, method: 'PATCH', body: { role } }), invalidatesTags: ['Users'] }),
     metrics: build.query<{ metrics: unknown[] }, { symbol: string; from?: string; to?: string }>({ query: p => ({ url: '/metrics', params: { ...p, interval: '1m' } }) }),
@@ -51,4 +53,4 @@ export const api = createApi({
   }),
 });
 
-export const { useSetupStatusQuery, useSessionQuery, useOverviewQuery, useSymbolsQuery, useSymbolQuery, useWatchlistQuery, useUsersQuery, useUpdateUserRoleMutation, useMetricsQuery, useAlertsQuery, useAcknowledgeAlertMutation, useRulesQuery, useRuleVersionsQuery, useCreateRuleMutation, useUpdateRuleMutation, useToggleRuleMutation, useRollbackRuleMutation, useAuditQuery } = api;
+export const { useSetupStatusQuery, useSessionQuery, useOverviewQuery, useSymbolsQuery, useSymbolQuery, useWatchlistQuery, useAddWatchlistSymbolMutation, useRemoveWatchlistSymbolMutation, useUsersQuery, useUpdateUserRoleMutation, useMetricsQuery, useAlertsQuery, useAcknowledgeAlertMutation, useRulesQuery, useRuleVersionsQuery, useCreateRuleMutation, useUpdateRuleMutation, useToggleRuleMutation, useRollbackRuleMutation, useAuditQuery } = api;

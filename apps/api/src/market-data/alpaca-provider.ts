@@ -78,6 +78,13 @@ export class AlpacaProvider implements MarketDataProvider {
   onEvent(listener: (event: MarketEvent) => void) { this.events.add(listener); return () => this.events.delete(listener); }
   onOperationalEvent(listener: (event: OperationalEvent) => void) { this.operational.add(listener); return () => this.operational.delete(listener); }
   async getMarketClock(): Promise<MarketClock> { const clock = await this.clock.get(); if (!clock.isOpen) this.transition('market_closed'); else if (this.providerState === 'market_closed') this.transition('connected'); return clock; }
+  async lookupAsset(symbol: string): Promise<{ symbol: string; tradable: boolean } | null> {
+    const response = await (this.options.fetch ?? fetch)(`https://api.alpaca.markets/v2/assets/${encodeURIComponent(symbol.toUpperCase())}`, { headers: { 'APCA-API-KEY-ID': this.options.apiKey, 'APCA-API-SECRET-KEY': this.options.apiSecret } });
+    if (response.status === 404) return null;
+    if (!response.ok) throw new Error(`Alpaca asset request failed (${response.status})`);
+    const body = await response.json() as { symbol?: string; tradable?: boolean };
+    return typeof body.symbol === 'string' ? { symbol: body.symbol, tradable: body.tradable === true } : null;
+  }
 }
 
 export class FakeMarketDataProvider implements MarketDataProvider {
@@ -89,5 +96,6 @@ export class FakeMarketDataProvider implements MarketDataProvider {
   onEvent(listener: (event: MarketEvent) => void) { this.listeners.add(listener); return () => this.listeners.delete(listener); }
   onOperationalEvent(_listener: (event: OperationalEvent) => void) { return () => undefined; }
   async getMarketClock() { return { isOpen: true, nextOpen: '', nextClose: '' }; }
+  async lookupAsset(symbol: string) { return { symbol: symbol.toUpperCase(), tradable: true }; }
   emit(event: MarketEvent) { for (const listener of this.listeners) listener(event); }
 }
