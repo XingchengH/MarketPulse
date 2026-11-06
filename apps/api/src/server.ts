@@ -39,10 +39,7 @@ const minuteWriter = new MinuteMetricWriter(upsertMinuteBucket, { onFailure: err
 minuteWriter.start();
 marketProvider.onEvent(event => {
   aggregator.ingest(event);
-  publisher?.overview({ provider: marketProvider.name, providerState: marketProvider.state(), symbols: subscribedSymbols });
-  void Promise.all(subscribedSymbols.map(symbol => aggregator.snapshotWithMarketState(symbol)))
-    .then(value => publisher?.symbols(value))
-    .catch(error => console.error({ component: 'realtime', error }, 'Realtime snapshot failure'));
+  publisher?.requestSnapshots({ provider: marketProvider.name, providerState: marketProvider.state(), symbols: subscribedSymbols, snapshot: symbol => aggregator.snapshotWithMarketState(symbol) });
   minuteWriter.ingest(event);
   void monitoring.observe(event.symbol).catch(error => console.error({ component: 'monitoring', error }, 'Monitoring evaluation failure'));
 });
