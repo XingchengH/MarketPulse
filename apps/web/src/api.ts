@@ -6,7 +6,8 @@ export type ServiceState = 'ready' | 'missing' | 'unavailable';
 export interface SetupStatus { configured: boolean; services: Record<'mongodb' | 'googleOAuth' | 'alpaca' | 'tokens', ServiceState> }
 export interface User { id: string; email: string; name: string; picture?: string; role: Role }
 export interface Overview { provider: string; providerState: string; symbols: string[] }
-export interface SymbolSnapshot { symbol: string; latestTrade?: { price: number }; latestQuote?: { bid: number; ask: number }; spread?: number; receivedMessagesPerSecond: number; lastEventAt: string | null; observedLatency: { latest: number; p95: number }; staleDurationMs: number; marketClock?: { isOpen: boolean; session?: string } }
+export interface SymbolSnapshot { symbol: string; feed: string | null; latestTrade?: { price: number }; latestQuote?: { bid: number; ask: number }; spread?: number; receivedMessagesPerSecond: number; lastEventAt: string | null; observedLatency: { latest: number; p95: number }; staleDurationMs: number; providerErrors: number; reconnects: number; marketClock?: { isOpen: boolean; session?: string } }
+export interface WatchlistItem { _id: string; symbol: string; enabled: boolean; createdAt: string; updatedAt: string }
 export interface Alert { _id: string; symbol: string; metric: string; severity: string; status: string; value: number; threshold: number; lastObservedAt: string; acknowledgedAt?: string }
 export interface Rule extends RuleInput { _id: string; version: number; updatedAt: string }
 export interface RuleVersion { _id?: string; ruleId: string; version: number; snapshot: RuleInput; actorId: string; createdAt: string }
@@ -27,12 +28,16 @@ const httpBaseQuery: BaseQueryFn<string | FetchArgs, unknown, ApiError> = async 
 export const api = createApi({
   reducerPath: 'api',
   baseQuery: httpBaseQuery,
-  tagTypes: ['Overview', 'Symbols', 'Alerts', 'Rules', 'Audit'],
+  tagTypes: ['Overview', 'Symbols', 'Watchlist', 'Users', 'Alerts', 'Rules', 'Audit'],
   endpoints: build => ({
     setupStatus: build.query<SetupStatus, void>({ query: () => '/setup/status' }),
     session: build.query<{ user: User }, void>({ query: () => '/auth/me' }),
     overview: build.query<Overview, void>({ query: () => '/overview', providesTags: ['Overview'] }),
     symbols: build.query<{ symbols: SymbolSnapshot[] }, void>({ query: () => '/symbols', providesTags: ['Symbols'] }),
+    symbol: build.query<SymbolSnapshot, string>({ query: symbol => `/symbols/${symbol}`, providesTags: ['Symbols'] }),
+    watchlist: build.query<{ watchlist: WatchlistItem[] }, void>({ query: () => '/watchlist', providesTags: ['Watchlist'] }),
+    users: build.query<{ users: User[] }, void>({ query: () => '/admin/users', providesTags: ['Users'] }),
+    updateUserRole: build.mutation<{ user: User }, { id: string; role: Role }>({ query: ({ id, role }) => ({ url: `/admin/users/${id}/role`, method: 'PATCH', body: { role } }), invalidatesTags: ['Users'] }),
     metrics: build.query<{ metrics: unknown[] }, { symbol: string; from?: string; to?: string }>({ query: p => ({ url: '/metrics', params: { ...p, interval: '1m' } }) }),
     alerts: build.query<{ alerts: Alert[] }, string | void>({ query: status => ({ url: '/alerts', params: status ? { status } : undefined }), providesTags: ['Alerts'] }),
     acknowledgeAlert: build.mutation<{ alert: Alert }, string>({ query: id => ({ url: `/alerts/${id}/acknowledge`, method: 'POST' }), invalidatesTags: ['Alerts', 'Audit'] }),
@@ -46,4 +51,4 @@ export const api = createApi({
   }),
 });
 
-export const { useSetupStatusQuery, useSessionQuery, useOverviewQuery, useSymbolsQuery, useMetricsQuery, useAlertsQuery, useAcknowledgeAlertMutation, useRulesQuery, useRuleVersionsQuery, useCreateRuleMutation, useUpdateRuleMutation, useToggleRuleMutation, useRollbackRuleMutation, useAuditQuery } = api;
+export const { useSetupStatusQuery, useSessionQuery, useOverviewQuery, useSymbolsQuery, useSymbolQuery, useWatchlistQuery, useUsersQuery, useUpdateUserRoleMutation, useMetricsQuery, useAlertsQuery, useAcknowledgeAlertMutation, useRulesQuery, useRuleVersionsQuery, useCreateRuleMutation, useUpdateRuleMutation, useToggleRuleMutation, useRollbackRuleMutation, useAuditQuery } = api;
