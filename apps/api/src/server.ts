@@ -20,8 +20,8 @@ await database.connect();
 const provider = createGoogleIdentityProvider(config.google.clientId, config.google.clientSecret, config.google.redirectUri);
 const marketProvider = new AlpacaProvider({ apiKey: config.alpaca.apiKey, apiSecret: config.alpaca.apiSecret });
 const aggregator = new MarketDataAggregator({ marketClock: { get: () => marketProvider.getMarketClock() } });
-const monitoring = new MonitoringRuntime(aggregator, new MonitoringEvaluator(new AlertService()));
 let subscribedSymbols: string[] = [];
+const monitoring = new MonitoringRuntime({ snapshot: symbol => aggregator.snapshotWithMarketState(symbol), symbols: () => subscribedSymbols }, new MonitoringEvaluator(new AlertService()), undefined, { onError: error => console.error({ component: 'monitoring', error }, 'Monitoring evaluation failure') });
 const minuteWriter = new MinuteMetricWriter(upsertMinuteBucket, { onFailure: error => {
   aggregator.recordProviderError(subscribedSymbols);
   console.error({ component: 'minute-metric-writer', message: error.message }, 'Market metric persistence failure');
@@ -35,11 +35,13 @@ marketProvider.onEvent(event => {
 marketProvider.onOperationalEvent(event => {
   if (event.type === 'error') { aggregator.recordProviderError(subscribedSymbols); minuteWriter.record('providerErrors', subscribedSymbols); }
   if (event.type === 'reconnect') { aggregator.recordReconnect(subscribedSymbols); minuteWriter.record('reconnects', subscribedSymbols); }
+  void monitoring.tick();
 });
 const configured = Boolean(config.alpaca.apiKey && config.alpaca.apiSecret);
 await bootstrapDefaultWatchlist();
 const symbols = (await Watchlist.find({ enabled: true }).select('symbol').lean()) as Array<{ symbol: string }>;
 subscribedSymbols = symbols.map(item => item.symbol);
+monitoring.start();
 if (configured) {
   await marketProvider.connect(subscribedSymbols);
 }
@@ -55,5 +57,5 @@ const server = createApp({ config, database, auth: { provider, repository: new M
 
 const shutdown = createGracefulShutdown({ server, database });
 
-process.once('SIGINT', () => void Promise.all([marketProvider.disconnect(), minuteWriter.stop()]).then(() => shutdown('SIGINT')));
-process.once('SIGTERM', () => void Promise.all([marketProvider.disconnect(), minuteWriter.stop()]).then(() => shutdown('SIGTERM')));
+process.once('SIGINT', () => { monitoring.stop(); void Promise.all([marketProvider.disconnect(), minuteWriter.stop()]).then(() => shutdown('SIGINT')); });
+process.once('SIGTERM', () => { monitoring.stop(); void Promise.all([marketProvider.disconnect(), minuteWriter.stop()]).then(() => shutdown('SIGTERM')); });
