@@ -81,6 +81,15 @@ describe('monitoring Mongo transaction and index invariants', () => {
     const audit = await AuditEvent.findOne({ resourceId: String(alert._id) }).lean();
     expect(audit).toMatchObject({ actorId: 'operator-1', requestId: 'request-ack', resourceType: 'alert', resourceId: String(alert._id), action: 'alert.acknowledge' });
   });
+  it('invokes realtime hooks after committed rule and alert mutations', async () => {
+    const rulesChanged = vi.fn();
+    const alertsChanged = vi.fn();
+    const rule = await new RuleService(rulesChanged).create(base, context) as { _id: unknown };
+    const alert = await Alert.create({ ruleId: String(rule._id), ruleVersion: 1, symbol: 'AAPL', metric: 'observedLatencyMs', severity: 'critical', status: 'open', value: 120, threshold: 100, openedAt: new Date(), lastObservedAt: new Date() });
+    await new AlertService(alertsChanged).acknowledge(String(alert._id), 'operator', 'request-realtime');
+    expect(rulesChanged).toHaveBeenCalledOnce();
+    expect(alertsChanged).toHaveBeenCalledOnce();
+  });
   it('redacts sensitive nested alert metadata in acknowledgement audit snapshots', async () => {
     const inserted = await Alert.collection.insertOne({ ruleId: new mongoose.Types.ObjectId().toString(), ruleVersion: 1, symbol: 'AAPL', metric: 'observedLatencyMs', severity: 'critical', status: 'open', value: 120, threshold: 100, openedAt: new Date(), lastObservedAt: new Date(), metadata: { accessToken: 'nope', nested: { password: 'nope', safe: 'yes' } } });
     await new AlertService().acknowledge(String(inserted.insertedId), 'operator', 'req');
