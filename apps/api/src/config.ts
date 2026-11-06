@@ -5,7 +5,7 @@ const optionalCredential = z.string().trim().default('');
 const environmentSchema = z
   .object({
     NODE_ENV: z.enum(['development', 'test', 'production']).default('development'),
-    PORT: z.coerce.number().int().positive().max(65_535).default(4000),
+    PORT: z.coerce.number().int().positive().max(65_535).default(3000),
     WEB_ORIGIN: z.string().url(),
     MONGODB_URI: z.string().min(1),
     GOOGLE_CLIENT_ID: optionalCredential,

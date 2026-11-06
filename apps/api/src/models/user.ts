@@ -1,5 +1,6 @@
 import type { Role } from '@marketpulse/contracts';
-import { Schema, model, models } from 'mongoose';
+import mongoose from 'mongoose';
+const { Schema, model, models } = mongoose;
 
 export interface UserDocument {
   googleSubject: string;

@@ -74,6 +74,12 @@ importers:
       '@types/node':
         specifier: ^24.10.0
         version: 24.19.2
+      mongodb-memory-server:
+        specifier: ^10.3.0
+        version: 10.4.3(bare-buffer@3.7.1)
+      mongoose:
+        specifier: ^9.0.0
+        version: 9.11.4
       typescript:
         specifier: ~5.8.3
         version: 5.8.3

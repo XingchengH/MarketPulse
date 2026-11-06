@@ -24,11 +24,11 @@ services:
         required: false
     environment:
       NODE_ENV: production
-      PORT: 4000
+      PORT: 3000
       WEB_ORIGIN: http://localhost:5173
       MONGODB_URI: mongodb://mongodb:27017/marketpulse?replicaSet=rs0
     ports:
-      - '4000:4000'
+      - '3000:3000'
     depends_on:
       mongodb:
         condition: service_healthy

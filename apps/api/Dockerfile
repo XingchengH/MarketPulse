@@ -15,6 +15,6 @@ COPY --from=build --chown=marketpulse:marketpulse /app/apps/api/dist ./apps/api/
 COPY --from=build --chown=marketpulse:marketpulse /app/apps/api/package.json ./apps/api/package.json
 COPY --from=build --chown=marketpulse:marketpulse /app/packages/contracts ./packages/contracts
 USER marketpulse
-EXPOSE 4000
-HEALTHCHECK CMD wget -qO- http://127.0.0.1:4000/health/ready || exit 1
+EXPOSE 3000
+HEALTHCHECK CMD wget -qO- http://127.0.0.1:3000/health/ready || exit 1
 CMD ["node", "apps/api/dist/server.js"]

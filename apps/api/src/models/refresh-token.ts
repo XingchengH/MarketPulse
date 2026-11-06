@@ -1,8 +1,9 @@
-import { Schema, model, models } from 'mongoose';
+import mongoose from 'mongoose';
+const { Schema, model, models } = mongoose;
 
 export interface RefreshTokenDocument {
   tokenHash: string;
-  userId: Schema.Types.ObjectId;
+  userId: mongoose.Types.ObjectId;
   familyId: string;
   expiresAt: Date;
   purgeAt: Date;

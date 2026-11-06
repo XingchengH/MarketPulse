@@ -1,5 +1,6 @@
 import type { RuleInput } from '@marketpulse/contracts';
-import { Schema, model, models } from 'mongoose';
+import mongoose from 'mongoose';
+const { Schema, model, models } = mongoose;
 
 export interface RuleDocument extends RuleInput { version: number; creatorId: string; createdAt: Date; updatedAt: Date }
 const scope = new Schema({ kind: { type: String, enum: ['all', 'symbol'], required: true }, symbol: String }, { _id: false });

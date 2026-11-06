@@ -1,5 +1,6 @@
 import type { AlertStatus, RuleMetric } from '@marketpulse/contracts';
-import { Schema, model, models } from 'mongoose';
+import mongoose from 'mongoose';
+const { Schema, model, models } = mongoose;
 export interface AlertDocument { ruleId: string; ruleVersion: number; symbol: string; metric: RuleMetric; severity: string; status: AlertStatus; value: number; threshold: number; openedAt: Date; lastObservedAt: Date; recoveredAt?: Date; acknowledgedAt?: Date; acknowledgedBy?: string }
 const schema = new Schema<AlertDocument>({ ruleId: { type: String, required: true }, ruleVersion: { type: Number, required: true }, symbol: { type: String, required: true }, metric: { type: String, required: true }, severity: { type: String, required: true }, status: { type: String, enum: ['open', 'recovered', 'acknowledged'], required: true }, value: { type: Number, required: true }, threshold: { type: Number, required: true }, openedAt: { type: Date, required: true }, lastObservedAt: { type: Date, required: true }, recoveredAt: Date, acknowledgedAt: Date, acknowledgedBy: String }, { timestamps: true });
 schema.index({ ruleId: 1, symbol: 1 }, { unique: true, partialFilterExpression: { status: { $in: ['open', 'recovered'] } } });
