@@ -197,6 +197,26 @@ describe('realtime server', () => {
     publisher.close();
   });
 
+  it('does not emit or schedule work when an in-flight build resolves after close', async () => {
+    vi.useFakeTimers();
+    let release!: () => void;
+    const snapshot = vi.fn(async (symbol: string) => { await new Promise<void>(resolve => { release = resolve; }); return { symbol }; });
+    const target = { emit: vi.fn() };
+    const server = { to: () => target, volatile: { to: () => target } };
+    const publisher = new RealtimePublisher(server as never);
+    publisher.requestSnapshots({ provider: 'alpaca', providerState: 'connected', symbols: ['AAPL'], snapshot });
+    expect(snapshot).toHaveBeenCalledOnce();
+    publisher.close();
+    release();
+    await Promise.resolve();
+    await Promise.resolve();
+    publisher.requestSnapshots({ provider: 'alpaca', providerState: 'connected', symbols: ['MSFT'], snapshot });
+    await vi.runAllTimersAsync();
+    expect(target.emit).not.toHaveBeenCalled();
+    expect(snapshot).toHaveBeenCalledOnce();
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
   it('shuts down gracefully and disconnects clients', async () => {
     const app = await fixture('viewer');
     const socket = app.open('access_token=good');

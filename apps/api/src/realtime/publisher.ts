@@ -16,12 +16,14 @@ export class RealtimePublisher {
   private snapshotBuilding = false;
   private snapshotTimer?: NodeJS.Timeout;
   private lastSnapshotBuild = Number.NEGATIVE_INFINITY;
+  private closed = false;
   constructor(
     private readonly server: Pick<Server, 'to'>,
     private readonly options: { intervalMs?: number; maxSymbols?: number; now?: () => number } = {},
   ) { this.now = options.now ?? Date.now; }
 
   private publish(event: Event, value: unknown, room = 'workspace:default', replaceable = false) {
+    if (this.closed) return;
     const interval = this.options.intervalMs ?? 1_000;
     const elapsed = this.now() - (this.last.get(event) ?? Number.NEGATIVE_INFINITY);
     if (elapsed >= interval) {
@@ -50,9 +52,9 @@ export class RealtimePublisher {
   providerState(state: ProviderState) { this.publish('provider:state', { state, at: new Date().toISOString() }, 'workspace:default', true); }
   alertsChanged() { this.publish('alerts:changed', { at: new Date().toISOString() }); }
   rulesChanged() { this.publish('rules:changed', { at: new Date().toISOString() }); }
-  requestSnapshots(request: SnapshotRequest) { this.snapshotRequest = request; this.scheduleSnapshotBuild(); }
+  requestSnapshots(request: SnapshotRequest) { if (this.closed) return; this.snapshotRequest = request; this.scheduleSnapshotBuild(); }
   private scheduleSnapshotBuild() {
-    if (this.snapshotBuilding || this.snapshotTimer || !this.snapshotRequest) return;
+    if (this.closed || this.snapshotBuilding || this.snapshotTimer || !this.snapshotRequest) return;
     const wait = Math.max(0, (this.options.intervalMs ?? 1_000) - (this.now() - this.lastSnapshotBuild));
     if (wait === 0) { void this.buildSnapshots().catch(() => undefined); return; }
     this.snapshotTimer = setTimeout(() => { this.snapshotTimer = undefined; void this.buildSnapshots().catch(() => undefined); }, wait);
@@ -60,13 +62,14 @@ export class RealtimePublisher {
   }
   private async buildSnapshots() {
     const request = this.snapshotRequest;
-    if (!request || this.snapshotBuilding) return;
+    if (this.closed || !request || this.snapshotBuilding) return;
     this.snapshotRequest = undefined;
     this.snapshotBuilding = true;
     this.lastSnapshotBuild = this.now();
     const symbols = request.symbols.slice(0, this.options.maxSymbols ?? 500);
     try {
       const snapshots = await Promise.all(symbols.map(symbol => request.snapshot(symbol)));
+      if (this.closed) return;
       this.overview({ provider: request.provider, providerState: request.providerState, symbols: [...symbols] });
       this.symbols(snapshots as SymbolsSnapshotEvent);
     } finally {
@@ -74,5 +77,5 @@ export class RealtimePublisher {
       this.scheduleSnapshotBuild();
     }
   }
-  close() { for (const { timer } of this.pending.values()) clearTimeout(timer); this.pending.clear(); if (this.snapshotTimer) clearTimeout(this.snapshotTimer); this.snapshotTimer = undefined; this.snapshotRequest = undefined; }
+  close() { this.closed = true; for (const { timer } of this.pending.values()) clearTimeout(timer); this.pending.clear(); if (this.snapshotTimer) clearTimeout(this.snapshotTimer); this.snapshotTimer = undefined; this.snapshotRequest = undefined; }
 }
