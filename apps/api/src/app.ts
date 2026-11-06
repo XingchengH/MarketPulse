@@ -21,12 +21,14 @@ import { AlertService } from './monitoring/alert-service.js';
 import { createWatchlistRouter } from './routes/watchlist.js';
 import type { WatchlistService } from './monitoring/watchlist-service.js';
 import type { ProviderState } from '@marketpulse/contracts';
+import type { ConfigurationReadiness } from './routes/setup.js';
 
 export interface AppDependencies {
   config: AppConfig;
   database: Pick<Database, 'isReady'>;
   logger?: ErrorLogger;
   providerState?: () => ProviderState;
+  configurationReadiness?: ConfigurationReadiness;
   auth?: {
     provider: GoogleIdentityProvider;
     repository: AuthRepository & AdminUserRepository;
@@ -43,8 +45,8 @@ export function createApp(dependencies: AppDependencies): Express {
   app.use(helmet());
   app.use(cors({ origin: dependencies.config.webOrigin, credentials: true }));
   app.use(express.json({ limit: '100kb' }));
-  app.use('/health', createHealthRouter({ database: dependencies.database, config: dependencies.config, providerState: dependencies.providerState }));
-  app.use('/api/setup', createSetupRouter(dependencies.config, dependencies.database, dependencies.providerState));
+  app.use('/health', createHealthRouter({ database: dependencies.database, config: dependencies.config, providerState: dependencies.providerState, readiness: dependencies.configurationReadiness }));
+  app.use('/api/setup', createSetupRouter(dependencies.config, dependencies.database, dependencies.providerState, dependencies.configurationReadiness));
   app.use('/api', async (_request, response, next) => {
     if (await dependencies.database.isReady()) return next();
     return response.status(503).json({ error: { code: 'SERVICE_UNAVAILABLE', message: 'Database is not ready', requestId: response.locals.requestId } });

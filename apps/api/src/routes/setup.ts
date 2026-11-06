@@ -3,10 +3,17 @@ import type { AppConfig } from '../config.js';
 import type { Database } from '../db.js';
 import type { ProviderState } from '@marketpulse/contracts';
 
+export interface ConfigurationReadiness {
+  googleOAuth?: boolean;
+  alpaca?: boolean;
+  tokens?: boolean;
+}
+
 export function createSetupRouter(
   config: AppConfig,
   database: Pick<Database, 'isReady'>,
   providerState?: () => ProviderState,
+  readiness: ConfigurationReadiness = {},
 ): Router {
   const router = Router();
 
@@ -15,11 +22,11 @@ export function createSetupRouter(
     const services = {
       mongodb: mongodbReady ? 'ready' : 'unavailable',
       googleOAuth:
-        config.google.clientId && config.google.clientSecret && config.google.redirectUri
+        (readiness.googleOAuth ?? Boolean(config.google.clientId && config.google.clientSecret && config.google.redirectUri))
           ? 'ready'
           : 'missing',
-      alpaca: config.alpaca.apiKey && config.alpaca.apiSecret ? (providerState?.() ?? 'unavailable') : 'missing',
-      tokens: config.accessTokenSecret && config.refreshTokenPepper ? 'ready' : 'missing',
+      alpaca: (readiness.alpaca ?? Boolean(config.alpaca.apiKey && config.alpaca.apiSecret)) ? (providerState?.() ?? 'unavailable') : 'missing',
+      tokens: (readiness.tokens ?? Boolean(config.accessTokenSecret && config.refreshTokenPepper)) ? 'ready' : 'missing',
     } as const;
 
     response.json({

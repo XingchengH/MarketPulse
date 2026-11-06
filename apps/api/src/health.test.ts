@@ -39,13 +39,13 @@ describe('service health', () => {
     expect((await request(app).get('/health/live')).body).toEqual({ status: 'live' });
     const readiness = await request(app).get('/health/ready');
     expect(readiness.status).toBe(503);
-    expect(readiness.body).toEqual({ status: 'not_ready', services: { mongodb: 'unavailable', configuration: 'ready', alpaca: 'unconfigured' } });
+    expect(readiness.body).toEqual({ status: 'not_ready', services: { mongodb: 'unavailable', configuration: 'missing', alpaca: 'unconfigured' } });
     expect((await request(app).get('/api/overview')).status).toBe(503);
   });
 
   it('keeps diagnostics reachable through database startup failure and becomes ready after recovery', async () => {
     let databaseReady = false;
-    const config = { ...unconfigured.config, alpaca: { apiKey: 'key', apiSecret: 'secret' } };
+    const config = { ...unconfigured.config, google: { clientId: 'client', clientSecret: 'secret', redirectUri: 'https://example.com/callback' }, alpaca: { apiKey: 'key', apiSecret: 'secret' } };
     const app = createApp({ config, database: { isReady: () => databaseReady }, providerState: () => 'connected' });
     expect((await request(app).get('/health/live')).status).toBe(200);
     expect((await request(app).get('/api/setup/status')).body.services.mongodb).toBe('unavailable');
@@ -53,6 +53,27 @@ describe('service health', () => {
     databaseReady = true;
     expect((await request(app).get('/health/ready')).status).toBe(200);
     expect((await request(app).get('/api/setup/status')).body.services.mongodb).toBe('ready');
+  });
+
+  it('is not ready with a connected provider when required Google configuration is missing', async () => {
+    const config = { ...unconfigured.config, alpaca: { apiKey: 'key', apiSecret: 'secret' } };
+    const app = createApp({ config, database: { isReady: () => true }, providerState: () => 'connected' });
+    const readiness = await request(app).get('/health/ready');
+    expect(readiness.status).toBe(503);
+    expect(readiness.body.services.configuration).toBe('missing');
+    expect((await request(app).get('/api/setup/status')).body.configured).toBe(false);
+  });
+
+  it('allows explicit test-adapter configuration readiness without NODE_ENV exceptions', async () => {
+    const app = createApp({
+      ...unconfigured,
+      providerState: () => 'connected',
+      configurationReadiness: { googleOAuth: true, alpaca: true, tokens: true },
+    });
+    expect((await request(app).get('/health/ready')).status).toBe(200);
+    const setup = await request(app).get('/api/setup/status');
+    expect(setup.body.configured).toBe(true);
+    expect(setup.body.services).toMatchObject({ googleOAuth: 'ready', alpaca: 'connected', tokens: 'ready' });
   });
 
   it.each([
