@@ -10,7 +10,7 @@ export interface AdminUserRepository {
   listUsers(): Promise<AdminUser[]>;
   findUserById(id: string): Promise<PublicUser | null>;
   setRoleSafely(id: string, role: Role): Promise<
-    { status: 'updated'; user: AdminUser } | { status: 'not_found' } | { status: 'final_admin' }
+    { status: 'updated'; user: AdminUser; previousRole?: Role } | { status: 'not_found' } | { status: 'final_admin' }
   >;
 }
 
@@ -24,7 +24,7 @@ export function createAdminUsersRouter(repository: AdminUserRepository, audit?: 
     const result = await repository.setRoleSafely(request.params.id, parsed.data);
     if (result.status === 'not_found') return response.status(404).json({ error: { code: 'USER_NOT_FOUND', message: 'User not found' } });
     if (result.status === 'final_admin') return response.status(409).json({ error: { code: 'FINAL_ADMIN', message: 'The final admin cannot be demoted' } });
-    await audit?.record({ actorId: (response.locals.user as { sub: string }).sub, action: 'user.role_changed', resourceType: 'user', resourceId: result.user.id, requestId: response.locals.requestId, after: { role: result.user.role } });
+    await audit?.record({ actorId: (response.locals.user as { sub: string }).sub, action: 'user.role_changed', resourceType: 'user', resourceId: result.user.id, requestId: response.locals.requestId, before: { role: result.previousRole }, after: { role: result.user.role } });
     response.json({ user: result.user });
   });
   return router;

@@ -50,7 +50,7 @@ export class MongooseAuthRepository implements AuthRepository, AdminUserReposito
     return users.map((user) => adminUser(user as never));
   }
   async setRoleSafely(id: string, role: Role): Promise<
-    { status: 'updated'; user: AdminUser } | { status: 'not_found' } | { status: 'final_admin' }
+    { status: 'updated'; user: AdminUser; previousRole: Role } | { status: 'not_found' } | { status: 'final_admin' }
   > {
     return User.db.transaction(async (session) => {
       // Every role mutation writes the same record, preventing snapshot-isolation write skew.
@@ -61,7 +61,7 @@ export class MongooseAuthRepository implements AuthRepository, AdminUserReposito
         return { status: 'final_admin' as const };
       }
       const user = await User.findByIdAndUpdate(id, { $set: { role } }, { returnDocument: 'after', runValidators: true, session }).lean();
-      return { status: 'updated' as const, user: adminUser(user as never) };
+      return { status: 'updated' as const, user: adminUser(user as never), previousRole: current.role };
     });
   }
 }

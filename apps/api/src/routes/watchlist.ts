@@ -3,8 +3,8 @@ import type { CurrentRoleResolver } from '../auth/middleware.js';
 import { requireRole } from '../auth/middleware.js';
 import type { WatchlistResult, WatchlistService } from '../monitoring/watchlist-service.js';
 
-const responseFor = (response: import('express').Response, result: WatchlistResult) => {
-  if (result.status === 'updated') return response.json({ watchlist: result.watchlist });
+const responseFor = (response: import('express').Response, result: WatchlistResult, successStatus = 200) => {
+  if (result.status === 'updated') return response.status(successStatus).json({ watchlist: result.watchlist });
   if (result.status === 'provider_unavailable') return response.status(503).json({ error: { code: 'PROVIDER_UNAVAILABLE', message: 'Watchlist saved; provider subscription update failed' }, watchlist: result.watchlist });
   const errors = {
     duplicate: [409, 'DUPLICATE_SYMBOL', 'Symbol is already on the watchlist'],
@@ -21,8 +21,12 @@ export function createWatchlistRouter(service: WatchlistService, resolveRole: Cu
   router.get('/', async (_request, response) => response.json({ watchlist: await service.list() }));
   router.post('/', requireRole('admin', resolveRole), async (request, response) => {
     if (typeof request.body?.symbol !== 'string' || !request.body.symbol.trim()) return response.status(400).json({ error: { code: 'INVALID_SYMBOL', message: 'Symbol is required' } });
-    return responseFor(response, await service.add(request.body.symbol));
+    const actorId = (response.locals.user as { sub: string }).sub;
+    return responseFor(response, await service.add(request.body.symbol, { actorId, requestId: response.locals.requestId }), 201);
   });
-  router.delete('/:symbol', requireRole('admin', resolveRole), async (request, response) => responseFor(response, await service.remove(String(request.params.symbol))));
+  router.delete('/:symbol', requireRole('admin', resolveRole), async (request, response) => {
+    const actorId = (response.locals.user as { sub: string }).sub;
+    return responseFor(response, await service.remove(String(request.params.symbol), { actorId, requestId: response.locals.requestId }));
+  });
   return router;
 }
