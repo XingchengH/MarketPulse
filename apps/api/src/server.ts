@@ -18,6 +18,7 @@ import { createTokenService } from './auth/tokens.js';
 import { createRealtimeServer } from './realtime/socket-server.js';
 import { RealtimePublisher } from './realtime/publisher.js';
 import { WatchlistService, mongooseWatchlistRepository } from './monitoring/watchlist-service.js';
+import { BootstrapAttempt } from './bootstrap-attempt.js';
 
 const config = loadConfig();
 const database = connectDatabase(config.mongodbUri);
@@ -33,6 +34,7 @@ server.listen(config.port, () => console.log(`API listening on port ${config.por
 async function initialize(): Promise<void> {
   if (initializing || stopped) return;
   initializing = true;
+  const attempt = new BootstrapAttempt();
   try {
     await database.connect();
     const provider = createGoogleIdentityProvider(config.google.clientId, config.google.clientSecret, config.google.redirectUri);
@@ -52,18 +54,6 @@ async function initialize(): Promise<void> {
       aggregator.recordProviderError(subscribedSymbols);
       console.error({ component: 'minute-metric-writer', message: error.message }, 'Market metric persistence failure');
     } });
-    marketProvider.onEvent(event => {
-      aggregator.ingest(event);
-      publisher?.requestSnapshots({ provider: marketProvider.name, providerState: marketProvider.state(), symbols: subscribedSymbols, snapshot: symbol => aggregator.snapshotWithMarketState(symbol) });
-      minuteWriter.ingest(event);
-      void monitoring.observe(event.symbol).catch(error => console.error({ component: 'monitoring', error }, 'Monitoring evaluation failure'));
-    });
-    marketProvider.onOperationalEvent(event => {
-      if (event.type === 'state') publisher?.providerState(event.state);
-      if (event.type === 'error') { aggregator.recordProviderError(subscribedSymbols); minuteWriter.record('providerErrors', subscribedSymbols); }
-      if (event.type === 'reconnect') { aggregator.recordReconnect(subscribedSymbols); minuteWriter.record('reconnects', subscribedSymbols); }
-      void monitoring.tick();
-    });
     await bootstrapDefaultWatchlist();
     const symbols = (await Watchlist.find({ enabled: true }).select('symbol').lean()) as Array<{ symbol: string }>;
     subscribedSymbols = symbols.map(item => item.symbol);
@@ -77,16 +67,40 @@ async function initialize(): Promise<void> {
       symbol: async (symbol: string) => subscribedSymbols.includes(symbol) ? aggregator.snapshotWithMarketState(symbol) : null,
       metrics: async ({ symbol, from, to }: { symbol: string; from: Date; to: Date }) => MetricBucket.find({ symbol, bucketStart: { $gte: from, $lte: to } }).sort({ bucketStart: 1 }).lean(),
     };
-    application = createApp({ config, database, providerState: () => marketProvider.state(), auth: { provider, repository, tokens }, marketData, monitoring: { rules: ruleService, alerts: alertService, watchlist: watchlistService } });
+    if (config.alpaca.apiKey && config.alpaca.apiSecret) {
+      await marketProvider.connect(subscribedSymbols);
+      attempt.defer(() => marketProvider.disconnect());
+    }
+    const unsubscribeEvents = marketProvider.onEvent(event => {
+      aggregator.ingest(event);
+      publisher?.requestSnapshots({ provider: marketProvider.name, providerState: marketProvider.state(), symbols: subscribedSymbols, snapshot: symbol => aggregator.snapshotWithMarketState(symbol) });
+      minuteWriter.ingest(event);
+      void monitoring.observe(event.symbol).catch(error => console.error({ component: 'monitoring', error }, 'Monitoring evaluation failure'));
+    });
+    attempt.defer(() => { unsubscribeEvents(); });
+    const unsubscribeOperational = marketProvider.onOperationalEvent(event => {
+      if (event.type === 'state') publisher?.providerState(event.state);
+      if (event.type === 'error') { aggregator.recordProviderError(subscribedSymbols); minuteWriter.record('providerErrors', subscribedSymbols); }
+      if (event.type === 'reconnect') { aggregator.recordReconnect(subscribedSymbols); minuteWriter.record('reconnects', subscribedSymbols); }
+      void monitoring.tick();
+    });
+    attempt.defer(() => { unsubscribeOperational(); });
+    minuteWriter.start();
+    attempt.defer(() => minuteWriter.stop());
+    monitoring.start();
+    attempt.defer(() => monitoring.stop());
+    const fullApplication = createApp({ config, database, providerState: () => marketProvider.state(), auth: { provider, repository, tokens }, marketData, monitoring: { rules: ruleService, alerts: alertService, watchlist: watchlistService } });
+    // Socket.IO is attached only after every fallible bootstrap step above has succeeded.
     const realtime = createRealtimeServer(server, { tokens, findCurrentUser: id => repository.findUserById(id), webOrigin: config.webOrigin });
     publisher = new RealtimePublisher(realtime);
-    minuteWriter.start();
-    monitoring.start();
-    if (config.alpaca.apiKey && config.alpaca.apiSecret) await marketProvider.connect(subscribedSymbols);
-    publisher.overview({ provider: marketProvider.name, providerState: marketProvider.state(), symbols: subscribedSymbols });
     shutdown = createGracefulShutdown({ server, socket: { close: () => new Promise<void>(resolve => realtime.close(() => resolve())) }, provider: marketProvider, monitoring: { stop: () => { monitoring.stop(); publisher?.close(); } }, metrics: { flush: () => minuteWriter.stop() }, database });
+    application = fullApplication;
+    attempt.commit();
+    try { publisher.overview({ provider: marketProvider.name, providerState: marketProvider.state(), symbols: subscribedSymbols }); }
+    catch (error) { console.error({ component: 'realtime', error }, 'Initial overview publication failed'); }
     console.log('Database connected; application services started');
   } catch (error) {
+    await attempt.rollback();
     console.error({ component: 'bootstrap', error }, 'Application initialization failed; retrying');
     if (!stopped) setTimeout(() => { initializing = false; void initialize(); }, 2_000).unref();
     return;

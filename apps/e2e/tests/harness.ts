@@ -71,7 +71,7 @@ export async function startE2eHarness() {
     symbol: async (symbol: string) => symbol === 'AAPL' ? aggregator.snapshotWithMarketState(symbol) : null,
     metrics: async () => [],
   };
-  const app = createApp({ config, database, auth: { provider: google, repository, tokens }, marketData, monitoring: { rules: ruleService, alerts: alertService, watchlist: watchlistService } });
+  const app = createApp({ config, database, providerState: () => provider.state(), auth: { provider: google, repository, tokens }, marketData, monitoring: { rules: ruleService, alerts: alertService, watchlist: watchlistService } });
   const httpServer: Server = createServer(app);
   const realtime = createRealtimeServer(httpServer, { tokens, findCurrentUser: id => repository.findUserById(id) });
   const socketErrors: string[] = [];

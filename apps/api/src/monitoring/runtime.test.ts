@@ -50,4 +50,15 @@ describe('MonitoringRuntime', () => {
     await runtime.tick();
     expect(opened).toEqual(['errors']);
   });
+  it('suppresses stale-data rules for a degraded cached-open clock while evaluating provider counters', async () => {
+    const opened: string[] = [];
+    const rules = [
+      { id: 'stale', name: 'stale', scope: { kind: 'all' as const }, metric: 'lastEventAgeSeconds' as const, operator: 'gt' as const, threshold: 5, durationSeconds: 0, severity: 'critical' as const, enabled: true, version: 1, creatorId: 'u' },
+      { id: 'reconnects', name: 'reconnects', scope: { kind: 'all' as const }, metric: 'reconnects' as const, operator: 'gt' as const, threshold: 0, durationSeconds: 0, severity: 'warning' as const, enabled: true, version: 1, creatorId: 'u' },
+    ];
+    const snapshot = { observedLatency: { latest: 0 }, receivedMessagesPerSecond: 0, staleDurationMs: 60_000, providerErrors: 0, reconnects: 1, marketClockStatus: 'degraded' as const };
+    const runtime = new MonitoringRuntime({ snapshot: async () => snapshot, symbols: () => ['AAPL'] }, new MonitoringEvaluator({ upsertViolation: async value => { opened.push(value.id); }, recover: async () => {} }), { enabled: async () => rules }, { cadenceMs: 1, now: () => 10 });
+    await runtime.tick();
+    expect(opened).toEqual(['reconnects']);
+  });
 });
