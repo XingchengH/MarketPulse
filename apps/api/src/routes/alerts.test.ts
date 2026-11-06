@@ -14,11 +14,13 @@ describe('alert acknowledgement RBAC', () => {
     expect((await request(make('admin').app).post('/alerts/507f1f77bcf86cd799439011/acknowledge')).status).toBe(200);
   });
   it('allows viewers to list/detail and returns 404 for invalid IDs', async () => {
-    vi.spyOn(Alert, 'find').mockReturnValue({ sort: () => ({ lean: async () => [] }) } as never);
+    vi.spyOn(Alert, 'find').mockReturnValue({ sort: () => ({ skip: () => ({ limit: () => ({ lean: async () => [] }) }) }) } as never);
     vi.spyOn(Alert, 'findById').mockReturnValue({ lean: async () => ({ _id: '507f1f77bcf86cd799439011' }) } as never);
     const viewer = make('viewer').app;
     expect((await request(viewer).get('/alerts')).status).toBe(200);
     expect((await request(viewer).get('/alerts/507f1f77bcf86cd799439011')).status).toBe(200);
     expect((await request(viewer).get('/alerts/nope')).status).toBe(404);
+    expect((await request(viewer).get('/alerts?status=bogus')).status).toBe(400);
+    expect((await request(viewer).get('/alerts?limit=101')).status).toBe(400);
   });
 });

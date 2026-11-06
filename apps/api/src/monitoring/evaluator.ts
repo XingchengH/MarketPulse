@@ -9,6 +9,10 @@ const compare = (operator: RuleOperator, value: number, threshold: number): bool
 export class MonitoringEvaluator {
   private readonly started = new Map<string, { at: number; version: number }>();
   constructor(private readonly alerts: EvaluationAlertSink) {}
+  reconcile(activeRuleIds: ReadonlySet<string>, activeSymbols: ReadonlySet<string>): void {
+    for (const key of this.started.keys()) { const split = key.lastIndexOf(':'); if (!activeRuleIds.has(key.slice(0, split)) || !activeSymbols.has(key.slice(split + 1))) this.started.delete(key); }
+  }
+  pendingCount(): number { return this.started.size; }
   async evaluate(rules: readonly RuntimeRule[], symbol: string, metrics: MetricValues, observedAt = new Date()): Promise<void> {
     const activeIds = new Set(rules.filter(rule => rule.enabled && (rule.scope.kind === 'all' || rule.scope.symbol === symbol) && metrics[rule.metric] !== undefined).map(rule => rule.id));
     for (const key of this.started.keys()) if (key.endsWith(`:${symbol}`) && !activeIds.has(key.slice(0, key.length - symbol.length - 1))) this.started.delete(key);

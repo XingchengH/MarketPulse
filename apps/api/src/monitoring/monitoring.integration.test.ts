@@ -22,7 +22,7 @@ describe('monitoring Mongo transaction and index invariants', () => {
     await mongoose.connect(replicaSet.getUri(), { dbName: 'monitoring-transactions' });
     await Promise.all([Rule.syncIndexes(), RuleVersion.syncIndexes(), AuditEvent.syncIndexes(), Alert.syncIndexes()]);
   }, 60_000);
-  beforeEach(async () => { await Promise.all([Rule.deleteMany({}), RuleVersion.deleteMany({}), Alert.deleteMany({}), AuditEvent.collection.deleteMany({})]); });
+  beforeEach(async () => { await Promise.all([Rule.deleteMany({}), RuleVersion.collection.deleteMany({}), Alert.deleteMany({}), AuditEvent.collection.deleteMany({})]); });
   afterAll(async () => { await mongoose.disconnect(); await replicaSet?.stop(); });
 
   it('atomically creates, updates and rolls back into three immutable versions with audits', async () => {
@@ -36,6 +36,17 @@ describe('monitoring Mongo transaction and index invariants', () => {
     expect(await AuditEvent.countDocuments({ resourceId: id })).toBe(3);
     await RuleVersion.updateOne({ ruleId: id, version: 1 }, { $set: { snapshot: { ...base, threshold: 999 } } });
     expect((await RuleVersion.findOne({ ruleId: id, version: 1 }).lean())?.snapshot.threshold).toBe(100);
+  });
+  it('rejects deletion and replacement of rule versions', async () => {
+    const created = await rules.create(base, context) as { _id: unknown }; const id = String(created._id);
+    await expect(RuleVersion.deleteOne({ ruleId: id })).rejects.toThrow('append-only');
+    await expect(RuleVersion.deleteMany({ ruleId: id })).rejects.toThrow('append-only');
+    await expect(RuleVersion.findOneAndDelete({ ruleId: id })).rejects.toThrow('append-only');
+    const version = await RuleVersion.findOne({ ruleId: id }).lean();
+    await expect(RuleVersion.findByIdAndDelete(version?._id)).rejects.toThrow('append-only');
+    await expect(RuleVersion.replaceOne({ ruleId: id }, { ruleId: id, version: 1, snapshot: base, actorId: 'x' })).rejects.toThrow('append-only');
+    await expect(RuleVersion.findOneAndReplace({ ruleId: id }, { ruleId: id, version: 1, snapshot: base, actorId: 'x' })).rejects.toThrow('append-only');
+    expect(await RuleVersion.countDocuments({ ruleId: id })).toBe(1);
   });
 
   it('allows exactly one real concurrent optimistic update', async () => {
@@ -69,5 +80,12 @@ describe('monitoring Mongo transaction and index invariants', () => {
     expect(persisted).toMatchObject({ status: 'acknowledged', acknowledgedBy: 'operator-1', acknowledgedAt });
     const audit = await AuditEvent.findOne({ resourceId: String(alert._id) }).lean();
     expect(audit).toMatchObject({ actorId: 'operator-1', requestId: 'request-ack', resourceType: 'alert', resourceId: String(alert._id), action: 'alert.acknowledge' });
+  });
+  it('redacts sensitive nested alert metadata in acknowledgement audit snapshots', async () => {
+    const inserted = await Alert.collection.insertOne({ ruleId: new mongoose.Types.ObjectId().toString(), ruleVersion: 1, symbol: 'AAPL', metric: 'observedLatencyMs', severity: 'critical', status: 'open', value: 120, threshold: 100, openedAt: new Date(), lastObservedAt: new Date(), metadata: { accessToken: 'nope', nested: { password: 'nope', safe: 'yes' } } });
+    await new AlertService().acknowledge(String(inserted.insertedId), 'operator', 'req');
+    const audit = await AuditEvent.findOne({ resourceId: String(inserted.insertedId) }).lean() as { before?: Record<string, unknown> } | null;
+    expect(audit?.before).toMatchObject({ metadata: { nested: { safe: 'yes' } } });
+    expect(JSON.stringify(audit?.before)).not.toMatch(/nope|token|password/i);
   });
 });

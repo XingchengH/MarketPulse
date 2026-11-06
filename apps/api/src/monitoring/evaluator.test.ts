@@ -50,4 +50,14 @@ describe('MonitoringEvaluator', () => {
     await evaluator.evaluate([next], 'AAPL', { observedLatencyMs: 101 }, new Date(19_000));
     expect(opened).toEqual([19_000]);
   });
+  it('evicts timers for removed rules and symbols', async () => {
+    const evaluator = new MonitoringEvaluator({ upsertViolation: async () => {}, recover: async () => {} });
+    await evaluator.evaluate([rule], 'AAPL', { observedLatencyMs: 101 }, new Date(0));
+    await evaluator.evaluate([{ ...rule, id: 'r2' }], 'MSFT', { observedLatencyMs: 101 }, new Date(0));
+    expect(evaluator.pendingCount()).toBe(2);
+    evaluator.reconcile(new Set(['r1']), new Set(['AAPL']));
+    expect(evaluator.pendingCount()).toBe(1);
+    evaluator.reconcile(new Set(), new Set());
+    expect(evaluator.pendingCount()).toBe(0);
+  });
 });

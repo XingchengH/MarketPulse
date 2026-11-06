@@ -19,6 +19,10 @@ describe('rules routes', () => {
     const rules = service(); rules.get.mockResolvedValueOnce(null as never);
     expect((await request(app('viewer', 'viewer', rules)).get(`/rules/${ruleId}/versions`)).status).toBe(404);
   });
+  it('rejects unbounded or malformed pagination', async () => {
+    expect((await request(app('viewer')).get('/rules?limit=101')).status).toBe(400);
+    expect((await request(app('viewer')).get(`/rules/${ruleId}/versions?page=nope`)).status).toBe(400);
+  });
   it('returns 409 for an optimistic concurrency conflict', async () => {
     expect((await request(app('admin')).put(`/rules/${ruleId}`).send({ version: 2, rule: input })).status).toBe(409);
   });

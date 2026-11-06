@@ -9,6 +9,9 @@ import { MarketDataAggregator } from './market-data/aggregator.js';
 import { MetricBucket, upsertMinuteBucket } from './models/metric-bucket.js';
 import { bootstrapDefaultWatchlist, Watchlist } from './models/watchlist.js';
 import { MinuteMetricWriter } from './market-data/minute-writer.js';
+import { MonitoringEvaluator } from './monitoring/evaluator.js';
+import { AlertService } from './monitoring/alert-service.js';
+import { MonitoringRuntime } from './monitoring/runtime.js';
 
 const config = loadConfig();
 const database = connectDatabase(config.mongodbUri);
@@ -17,6 +20,7 @@ await database.connect();
 const provider = createGoogleIdentityProvider(config.google.clientId, config.google.clientSecret, config.google.redirectUri);
 const marketProvider = new AlpacaProvider({ apiKey: config.alpaca.apiKey, apiSecret: config.alpaca.apiSecret });
 const aggregator = new MarketDataAggregator({ marketClock: { get: () => marketProvider.getMarketClock() } });
+const monitoring = new MonitoringRuntime(aggregator, new MonitoringEvaluator(new AlertService()));
 let subscribedSymbols: string[] = [];
 const minuteWriter = new MinuteMetricWriter(upsertMinuteBucket, { onFailure: error => {
   aggregator.recordProviderError(subscribedSymbols);
@@ -26,6 +30,7 @@ minuteWriter.start();
 marketProvider.onEvent(event => {
   aggregator.ingest(event);
   minuteWriter.ingest(event);
+  void monitoring.observe(event.symbol).catch(error => console.error({ component: 'monitoring', error }, 'Monitoring evaluation failure'));
 });
 marketProvider.onOperationalEvent(event => {
   if (event.type === 'error') { aggregator.recordProviderError(subscribedSymbols); minuteWriter.record('providerErrors', subscribedSymbols); }
