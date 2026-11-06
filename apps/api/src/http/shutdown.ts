@@ -14,6 +14,10 @@ interface ShutdownLogger {
 interface ShutdownDependencies {
   server: DrainableServer;
   database: ShutdownDatabase;
+  socket?: { close(): Promise<void> | void };
+  provider?: { disconnect(): Promise<void> };
+  monitoring?: { stop(): Promise<void> | void };
+  metrics?: { flush(): Promise<void> };
   logger?: ShutdownLogger;
   timeoutMs?: number;
 }
@@ -28,6 +32,10 @@ function timeoutAfter(milliseconds: number, phase: string): Promise<never> {
 export function createGracefulShutdown({
   server,
   database,
+  socket,
+  provider,
+  monitoring,
+  metrics,
   logger = console,
   timeoutMs = 10_000,
 }: ShutdownDependencies): (reason: string) => Promise<void> {
@@ -45,6 +53,18 @@ export function createGracefulShutdown({
       } catch (error) {
         logger.error({ error, phase: 'http', reason }, 'HTTP shutdown failed');
         server.closeAllConnections();
+      }
+
+      for (const [phase, operation] of [
+        ['Socket', () => socket?.close()],
+        ['Provider', () => provider?.disconnect()],
+        ['Monitoring', () => monitoring?.stop()],
+        ['Metrics', () => metrics?.flush()],
+      ] as const) {
+        const pending = operation();
+        if (!pending) continue;
+        try { await Promise.race([Promise.resolve(pending), timeoutAfter(timeoutMs, phase)]); }
+        catch (error) { logger.error({ error, phase: 'http', reason }, `${phase} shutdown failed`); }
       }
 
       try {

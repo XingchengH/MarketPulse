@@ -8,7 +8,7 @@ export interface User { id: string; email: string; name: string; picture?: strin
 export interface Overview { provider: string; providerState: string; symbols: string[] }
 export interface SymbolSnapshot { symbol: string; feed: string | null; latestTrade?: { price: number }; latestQuote?: { bid: number; ask: number }; spread?: number; receivedMessagesPerSecond: number; lastEventAt: string | null; observedLatency: { latest: number; p95: number }; staleDurationMs: number; providerErrors: number; reconnects: number; marketClock?: { isOpen: boolean; session?: string } }
 export interface WatchlistItem { _id: string; symbol: string; enabled: boolean; createdAt: string; updatedAt: string }
-export interface Alert { _id: string; symbol: string; metric: string; severity: string; status: string; value: number; threshold: number; lastObservedAt: string; acknowledgedAt?: string }
+export interface Alert { _id: string; symbol: string; metric: string; severity: string; status: string; value: number; threshold: number; lastObservedAt: string; acknowledgedAt?: string; acknowledgedBy?: string }
 export interface Rule extends RuleInput { _id: string; version: number; updatedAt: string }
 export interface RuleVersion { _id?: string; ruleId: string; version: number; snapshot: RuleInput; actorId: string; createdAt: string }
 export interface AuditEvent { _id: string; actorId: string; action: string; resourceType: string; resourceId: string; before?: unknown; after?: unknown; createdAt: string }

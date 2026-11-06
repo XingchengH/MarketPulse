@@ -75,13 +75,16 @@ server.listen(config.port, () => {
 publisher.overview({ provider: marketProvider.name, providerState: marketProvider.state(), symbols: subscribedSymbols });
 
 const shutdown = createGracefulShutdown({
-  server: { close: callback => realtime.close(callback), closeAllConnections: () => server.closeAllConnections() },
+  server,
+  socket: { close: () => new Promise<void>(resolve => realtime.close(() => resolve())) },
+  provider: marketProvider,
+  monitoring: { stop: () => { monitoring.stop(); publisher?.close(); } },
+  metrics: { flush: () => minuteWriter.stop() },
   database,
 });
 
 const stop = (signal: string) => {
-  monitoring.stop(); publisher?.close();
-  void Promise.all([marketProvider.disconnect(), minuteWriter.stop()]).then(() => shutdown(signal));
+  void shutdown(signal);
 };
 process.once('SIGINT', () => stop('SIGINT'));
 process.once('SIGTERM', () => stop('SIGTERM'));

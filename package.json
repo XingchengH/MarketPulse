@@ -6,7 +6,8 @@
   "scripts": {
     "dev": "pnpm --parallel --filter @marketpulse/api --filter @marketpulse/web dev",
     "build": "pnpm -r build",
-    "test": "pnpm -r test",
+    "test": "pnpm -r --filter '!@marketpulse/e2e' test",
+    "e2e": "pnpm --filter @marketpulse/e2e test",
     "typecheck": "pnpm -r typecheck"
   }
 }

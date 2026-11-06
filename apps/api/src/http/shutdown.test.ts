@@ -33,6 +33,24 @@ describe('graceful shutdown', () => {
     expect(database.disconnect).toHaveBeenCalledTimes(1);
   });
 
+  it('stops ingress before monitoring, flushes metrics, and finally closes Mongo', async () => {
+    const order: string[] = [];
+    const server = { close: (done: (error?: Error) => void) => { order.push('http'); done(); }, closeAllConnections: vi.fn() };
+    const database = { disconnect: vi.fn(async () => { order.push('mongo'); }) };
+    const shutdown = createGracefulShutdown({
+      server,
+      database,
+      socket: { close: async () => { order.push('socket'); } },
+      provider: { disconnect: async () => { order.push('provider'); } },
+      monitoring: { stop: async () => { order.push('monitoring'); } },
+      metrics: { flush: async () => { order.push('metrics'); } },
+    });
+
+    await shutdown('SIGTERM');
+
+    expect(order).toEqual(['http', 'socket', 'provider', 'monitoring', 'metrics', 'mongo']);
+  });
+
   it('bounds a stuck drain, forces connections closed, and logs failures', async () => {
     const logger = { error: vi.fn() };
     const server = {
