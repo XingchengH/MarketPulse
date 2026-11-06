@@ -6,11 +6,13 @@ The required gate completed successfully with `CI=true` where specified:
 
 - `CI=true pnpm install --frozen-lockfile` — exit 0, frozen lockfile accepted.
 - `CI=true pnpm typecheck` — exit 0 across contracts, API, web, and E2E.
-- `CI=true pnpm test` — exit 0; 140 tests passed (4 contracts, 107 API, 29 web).
+- `CI=true pnpm test` — exit 0; 141 tests passed (4 contracts, 108 API, 29 web).
 - `CI=true pnpm build` — exit 0 across contracts, API, web, and E2E.
 - `docker compose config` — exit 0; API port 3000 and replica-set MongoDB configuration rendered successfully.
 - `CI=true pnpm --filter @marketpulse/e2e test` — exit 0; 1 integrated Playwright smoke test passed.
 
-The controlled E2E starts the real API, HTTP server, Socket.IO server, MongoDB replica set, OAuth state/callback and session flow, RBAC routes, monitoring evaluator, alert persistence, audit transaction, and browser UI. Google identity and Alpaca IEX transport are the only test doubles. The AAPL trade is emitted directly through the in-process fake-provider handle; there is no event-injection HTTP or socket endpoint.
+Clean-checkout reproducibility was also checked by moving the ignored `apps/api/dist` directory out of the workspace and rerunning `CI=true pnpm typecheck`; it passed before the directory was restored.
+
+The controlled E2E composes the production Express routes, HTTP and Socket.IO servers, OAuth state/callback and session flow, RBAC services, monitoring evaluator, models, alert/audit transactions, and a MongoDB replica set. Google identity and Alpaca IEX transport are test doubles. A narrow readiness/market-data façade replaces `server.ts` bootstrap, so the smoke does not exercise watchlist bootstrapping or minute-bucket writing; those remain separately tested. The AAPL trade is emitted directly through the in-process fake-provider handle; there is no event-injection HTTP or socket endpoint.
 
 Live verification remains pending and is not implied by this record: a callback using user-owned Google credentials and an authenticated Alpaca connection/market event using approved live credentials and entitlements must be verified separately.

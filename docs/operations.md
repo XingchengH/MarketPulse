@@ -2,7 +2,7 @@
 
 ## Runtime
 
-The Compose stack exposes the web app on `5173`, API on `3000`, and MongoDB on `27017`. MongoDB starts a single-node replica set for local transactional behavior. Build images from the repository root; both application images use multi-stage builds, non-root runtime users, and health checks. `/health/live` is process liveness and `/health/ready` checks dependencies.
+The Compose stack exposes the web app on `5173`, API on `3000`, and binds MongoDB only to `127.0.0.1:27017`. MongoDB starts a single-node replica set for local transactional behavior. Production MongoDB must require authentication and must not be publicly exposed. Build images from the repository root; both application images use multi-stage builds, non-root runtime users, and health checks. `/health/live` is process liveness and `/health/ready` checks dependencies.
 
 On SIGTERM or SIGINT the API stops accepting HTTP, closes Socket.IO, disconnects the market-data provider, stops monitoring, performs a bounded final minute-metric flush, and closes MongoDB. Each phase is time-bounded so orchestration can eventually terminate a stuck process.
 

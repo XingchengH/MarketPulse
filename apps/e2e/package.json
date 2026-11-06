@@ -3,6 +3,6 @@
   "private": true,
   "version": "0.1.0",
   "type": "module",
-  "scripts": { "test": "pnpm --filter @marketpulse/api build && playwright test", "typecheck": "tsc --noEmit", "build": "tsc --noEmit" },
+  "scripts": { "test": "node scripts/run-playwright.mjs", "typecheck": "tsc --noEmit", "build": "tsc --noEmit" },
   "devDependencies": { "@playwright/test": "^1.56.1", "@types/node": "^24.10.0", "mongodb-memory-server": "^10.3.0", "mongoose": "^9.0.0", "typescript": "~5.8.3" }
 }

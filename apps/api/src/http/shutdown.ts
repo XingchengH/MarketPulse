@@ -37,38 +37,26 @@ export function createGracefulShutdown({
   monitoring,
   metrics,
   logger = console,
-  timeoutMs = 10_000,
+  timeoutMs = 8_000,
 }: ShutdownDependencies): (reason: string) => Promise<void> {
   let shutdownPromise: Promise<void> | undefined;
 
   return (reason: string) => {
     shutdownPromise ??= (async () => {
-      try {
-        await Promise.race([
-          new Promise<void>((resolve, reject) => {
-            server.close((error) => (error ? reject(error) : resolve()));
-          }),
-          timeoutAfter(timeoutMs, 'HTTP'),
-        ]);
-      } catch (error) {
-        logger.error({ error, phase: 'http', reason }, 'HTTP shutdown failed');
-        server.closeAllConnections();
-      }
-
-      for (const [phase, operation] of [
-        ['Socket', () => socket?.close()],
-        ['Provider', () => provider?.disconnect()],
-        ['Monitoring', () => monitoring?.stop()],
-        ['Metrics', () => metrics?.flush()],
-      ] as const) {
-        const pending = operation();
-        if (!pending) continue;
-        try { await Promise.race([Promise.resolve(pending), timeoutAfter(timeoutMs, phase)]); }
+      const phaseBudget = Math.max(1, Math.floor(timeoutMs / 3));
+      const stop = async (phase: string, operation: (() => Promise<void> | void) | undefined) => {
+        if (!operation) return;
+        try { await Promise.race([Promise.resolve().then(operation), timeoutAfter(phaseBudget, phase)]); }
         catch (error) { logger.error({ error, phase: 'http', reason }, `${phase} shutdown failed`); }
-      }
+      };
+      const http = stop('HTTP', () => new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve())));
+      await Promise.all([http, stop('Socket', socket && (() => socket.close())), stop('Provider', provider && (() => provider.disconnect())), stop('Monitoring', monitoring && (() => monitoring.stop()))]);
+      server.closeAllConnections();
+
+      await stop('Metrics', metrics && (() => metrics.flush()));
 
       try {
-        await Promise.race([database.disconnect(), timeoutAfter(timeoutMs, 'Database')]);
+        await Promise.race([database.disconnect(), timeoutAfter(phaseBudget, 'Database')]);
       } catch (error) {
         logger.error({ error, phase: 'database', reason }, 'Database shutdown failed');
       }

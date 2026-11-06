@@ -25,7 +25,7 @@ docker compose config
 CI=true pnpm --filter @marketpulse/e2e test
 ```
 
-The E2E smoke test starts the real Express, HTTP, Socket.IO, monitoring, RBAC, persistence, and MongoDB replica-set stack. Only Google and Alpaca are replaced with `NODE_ENV=test` adapters; its trade enters through the in-process fake-provider handle, never a public injection endpoint. It does not prove live Google OAuth, Alpaca authorization, exchange coverage, or production networking; verify those separately with credentials in a deployment environment.
+The E2E smoke test composes the production Express routes, HTTP, Socket.IO, authentication/RBAC, monitoring services, models, and a MongoDB replica set around `NODE_ENV=test` Google and Alpaca adapters. It supplies a small readiness/market-data façade instead of executing `server.ts`, so production bootstrap, watchlist bootstrap, and minute-bucket writing remain covered by their API tests rather than this browser smoke. Its trade enters through the in-process fake-provider handle, never a public injection endpoint. It does not prove live Google OAuth, Alpaca authorization, exchange coverage, or production networking; verify those separately with credentials in a deployment environment.
 
 See [operations](docs/operations.md) for deployment, health checks, shutdown behavior, and the production checklist. Observed latency means `API receipt timestamp − provider event timestamp`; it includes provider publication, network transit, client/runtime scheduling, and clock alignment, so it is not a network-only measurement.
 

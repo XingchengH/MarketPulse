@@ -21,6 +21,7 @@ test('real stack logs in an admin, streams IEX data, and persists acknowledgemen
     await page.getByRole('button', { name: 'Acknowledge' }).click();
     await expect(page.getByText(/Acknowledged by/)).toBeVisible();
   } finally {
+    await page.close();
     await harness.stop();
   }
 });
