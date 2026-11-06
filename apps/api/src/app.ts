@@ -17,6 +17,7 @@ import { createRulesRouter } from './routes/rules.js';
 import { createAlertsRouter } from './routes/alerts.js';
 import { createAuditRouter } from './routes/audit.js';
 import { RuleService } from './monitoring/rule-service.js';
+import { AlertService } from './monitoring/alert-service.js';
 
 export interface AppDependencies {
   config: AppConfig;
@@ -28,7 +29,7 @@ export interface AppDependencies {
     tokens?: TokenService;
   };
   marketData?: MarketDataApi;
-  monitoring?: { rules?: RuleService };
+  monitoring?: { rules?: RuleService; alerts?: AlertService };
 }
 
 export function createApp(dependencies: AppDependencies): Express {
@@ -54,7 +55,7 @@ export function createApp(dependencies: AppDependencies): Express {
     if (dependencies.monitoring) {
       const resolveRole = async (id: string) => (await dependencies.auth!.repository.findUserById(id))?.role ?? null;
       app.use('/api/rules', requireUser(tokens), createRulesRouter(dependencies.monitoring.rules ?? new RuleService(), resolveRole));
-      app.use('/api/alerts', requireUser(tokens), createAlertsRouter(resolveRole));
+      app.use('/api/alerts', requireUser(tokens), createAlertsRouter(resolveRole, dependencies.monitoring.alerts));
       app.use('/api/audit', requireUser(tokens), createAuditRouter(resolveRole));
     }
   }
