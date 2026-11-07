@@ -18,7 +18,7 @@ export const assetSearchResultSchema = z.object({
 
 export const watchlistEntrySchema = z.object({
   ...assetFields,
-  id: z.string(),
+  id: z.string().min(1),
   createdAt: z.string().datetime(),
 });
 

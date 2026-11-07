@@ -50,6 +50,7 @@ describe('shared contracts', () => {
   it('accepts persisted entries and enforces watchlist boundaries', () => {
     const entry = { id: 'entry-1', symbol: 'AAPL', companyName: 'Apple Inc.', assetClass: 'us_equity', createdAt: '2026-11-04T20:00:00.000Z' };
     expect(watchlistEntrySchema.parse(entry)).toEqual(entry);
+    expect(watchlistEntrySchema.safeParse({ ...entry, id: '' }).success).toBe(false);
     expect(watchlistEntrySchema.safeParse({ ...entry, createdAt: 'yesterday' }).success).toBe(false);
     expect(personalWatchlistSchema.safeParse({ entries: Array(25).fill(entry), used: 25, limit: 25 }).success).toBe(true);
     expect(personalWatchlistSchema.safeParse({ entries: Array(26).fill(entry), used: 25, limit: 25 }).success).toBe(false);
