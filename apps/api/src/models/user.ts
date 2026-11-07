@@ -9,6 +9,7 @@ export interface UserDocument {
   picture?: string;
   role: Role;
   lastLoginAt?: Date;
+  watchlistInitializedAt?: Date;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -20,6 +21,7 @@ const userSchema = new Schema<UserDocument>({
   picture: { type: String },
   role: { type: String, enum: ['viewer', 'operator', 'admin'], default: 'viewer', required: true },
   lastLoginAt: { type: Date },
+  watchlistInitializedAt: { type: Date },
 }, { timestamps: true });
 
 export const User = models.User ?? model<UserDocument>('User', userSchema);

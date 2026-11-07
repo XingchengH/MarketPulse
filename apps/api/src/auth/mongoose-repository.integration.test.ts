@@ -34,6 +34,24 @@ describe('Mongoose auth transaction invariants', () => {
     await replicaSet?.stop();
   });
 
+  it('awaits the watchlist initializer once per Google upsert with the persisted user id', async () => {
+    const initialize = vi.fn<(userId: string) => Promise<void>>().mockResolvedValue(undefined);
+    const withInitializer = new MongooseAuthRepository(initialize);
+    const profile = { subject: 'google-watchlist', email: 'watchlist@example.com', name: 'Watchlist' };
+    const first = await withInitializer.upsertGoogleUser(profile);
+    const second = await withInitializer.upsertGoogleUser(profile);
+    expect(second.id).toBe(first.id);
+    expect(initialize.mock.calls).toEqual([[first.id], [first.id]]);
+  });
+
+  it('propagates initialization failures before returning an authenticated user', async () => {
+    const initialize = vi.fn<(userId: string) => Promise<void>>().mockRejectedValue(new Error('watchlist unavailable'));
+    const withInitializer = new MongooseAuthRepository(initialize);
+    await expect(withInitializer.upsertGoogleUser({ subject: 'google-failure', email: 'failure@example.com', name: 'Failure' })).rejects.toThrow('watchlist unavailable');
+    expect(initialize).toHaveBeenCalledOnce();
+    expect(await RefreshToken.countDocuments()).toBe(0);
+  });
+
   it('retries simultaneous refresh consumption and leaves no live successor after compromise', async () => {
     const userId = new Types.ObjectId();
     const purgeAt = new Date(Date.now() + 60_000);
