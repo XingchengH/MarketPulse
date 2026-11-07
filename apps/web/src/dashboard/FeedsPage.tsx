@@ -1,0 +1,34 @@
+import { useState } from 'react';
+import { useOverviewQuery, useSymbolsQuery, type SymbolSnapshot } from '../api';
+import { StatusBadge } from '../components/StatusBadge';
+import { FeedDrawer } from './FeedDrawer';
+
+function health(snapshot: SymbolSnapshot) {
+  if (!snapshot.lastEventAt || snapshot.marketClockStatus === 'unavailable') return 'unavailable';
+  if (snapshot.marketClockStatus === 'degraded') return 'degraded';
+  if (snapshot.marketClock && !snapshot.marketClock.isOpen) return 'healthy';
+  if (snapshot.providerErrors > 0 || snapshot.reconnects > 0) return 'degraded';
+  return 'healthy';
+}
+
+export function marketState(snapshot: SymbolSnapshot) {
+  if (snapshot.marketClockStatus === 'unavailable' || !snapshot.marketClock) return 'unavailable';
+  if (snapshot.marketClockStatus === 'degraded') return 'degraded';
+  return snapshot.marketClock.isOpen ? 'open' : 'market_closed';
+}
+
+export function marketStateTitle(snapshot: SymbolSnapshot) {
+  if (snapshot.marketClockStatus === 'unavailable' || !snapshot.marketClock) return 'Market clock unavailable; stale-data monitoring is paused';
+  if (snapshot.marketClockStatus === 'degraded') return `Using last known market clock${snapshot.marketClock.staleAgeMs === undefined ? '' : ` (${Math.round(snapshot.marketClock.staleAgeMs / 1000)}s old)`}`;
+  return 'Current market clock';
+}
+
+export function FeedsPage({ compact = false }: { compact?: boolean }) {
+  const symbols = useSymbolsQuery(), overview = useOverviewQuery();
+  const [selectedSymbol, setSelectedSymbol] = useState<string>();
+  if (symbols.isLoading) return <p className="loading-state">Loading symbols…</p>;
+  if (symbols.isError) return <div className="error-state"><h2>Symbols are unavailable</h2><button className="button" onClick={() => void symbols.refetch()}>Retry</button></div>;
+  const rows = compact ? symbols.data?.symbols.slice(0, 6) : symbols.data?.symbols;
+  const selected = symbols.data?.symbols.find(item => item.symbol === selectedSymbol);
+  return <section className="panel feed-panel"><div className="panel-heading"><div><h2>Symbol monitor</h2><p>{overview.data?.provider ?? 'Market data'} · {rows?.length ?? 0} symbols</p></div></div><div className="table-scroll"><table className="feeds-table"><thead><tr><th>Symbol</th><th>Feed</th><th>Market state</th><th className="numeric">Latest price</th><th className="numeric">Spread</th><th className="numeric" title="Messages received by the API during the trailing one-second window.">Received msg/s</th><th className="numeric" title="Time from provider timestamp to API receipt; measured, not network-only latency.">Observed latency</th><th>Last event</th><th title="Health uses event availability, provider errors/reconnects, and market-open state. Event age is displayed separately and is not treated as stale while the market is closed.">Health</th></tr></thead><tbody>{rows?.map(row => <tr key={row.symbol} onClick={() => setSelectedSymbol(row.symbol)}><td><button className="exchange-cell" onClick={() => setSelectedSymbol(row.symbol)}><strong>{row.symbol}</strong></button></td><td>{row.feed?.toUpperCase() ?? 'Awaiting data'}</td><td title={marketStateTitle(row)}><StatusBadge value={marketState(row)}/></td><td className="numeric mono">{row.latestTrade?.price?.toFixed(2) ?? '—'}</td><td className="numeric mono">{row.spread?.toFixed(4) ?? '—'}</td><td className="numeric mono">{row.receivedMessagesPerSecond}</td><td className="numeric mono">{row.observedLatency.latest.toFixed(0)} ms</td><td title={`${(row.staleDurationMs / 1000).toFixed(1)} seconds since the API received the last event`}>{row.lastEventAt ? new Date(row.lastEventAt).toLocaleTimeString() : '—'}</td><td><StatusBadge value={health(row)}/></td></tr>)}</tbody></table>{!rows?.length && <div className="empty-state"><h3>No symbols are being monitored</h3><p>Add an enabled symbol to the API watchlist.</p></div>}</div>{selected && <FeedDrawer feed={selected} onClose={() => setSelectedSymbol(undefined)}/>}</section>;
+}
