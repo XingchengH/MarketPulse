@@ -12,6 +12,8 @@ Requirements: Node 22+, pnpm 11.25, and MongoDB 8 configured as a replica set (t
 4. Run `pnpm install --frozen-lockfile`, then `pnpm dev`.
 5. Open `http://localhost:5173`. The API listens on `http://localhost:3000`; Google must redirect exactly to `http://localhost:3000/api/auth/google/callback`.
 
+`pnpm dev` builds the shared contracts before starting the API and web development servers, then watches contracts alongside both servers so edits to the shared package are rebuilt automatically.
+
 Secrets belong only in the untracked `.env` file or a server-side secret manager. Never place Google or Alpaca secrets in `apps/web`, a `VITE_*` variable, client JavaScript, source control, or images.
 
 ## Validation
@@ -28,5 +30,9 @@ CI=true pnpm --filter @marketpulse/e2e test
 The E2E smoke test composes the production Express routes, HTTP, Socket.IO, authentication/RBAC, monitoring services, models, and a MongoDB replica set around `NODE_ENV=test` Google and Alpaca adapters. It supplies a small readiness/market-data façade instead of executing `server.ts`, so production bootstrap, watchlist bootstrap, and minute-bucket writing remain covered by their API tests rather than this browser smoke. Its trade enters through the in-process fake-provider handle, never a public injection endpoint. It does not prove live Google OAuth, Alpaca authorization, exchange coverage, or production networking; verify those separately with credentials in a deployment environment.
 
 See [operations](docs/operations.md) for deployment, health checks, shutdown behavior, and the production checklist. Observed latency means `API receipt timestamp − provider event timestamp`; it includes provider publication, network transit, client/runtime scheduling, and clock alignment, so it is not a network-only measurement.
+
+## Free preview deployment
+
+GitHub Pages cannot run the API, OAuth callback, MongoDB transactions, or WebSockets. The included `render.yaml` deploys one same-origin Docker web service on Render; use a MongoDB Atlas Free connection string for `MONGODB_URI`. Render generates the token secrets, while Google and Alpaca credentials are entered in Render's secret prompts. Free Render services spin down when idle, so this configuration is intended for demos and portfolio previews rather than production workloads.
 
 The latest local evidence is recorded in [verification record — 2026-11-06](docs/verification-2026-11-06.md).

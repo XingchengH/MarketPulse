@@ -21,7 +21,7 @@ describe('loadConfig', () => {
       nodeEnv: 'development',
       port: 4000,
       webOrigin: 'http://localhost:5173',
-      google: { clientId: '', clientSecret: '', redirectUri: '' },
+      google: { clientId: '', clientSecret: '', redirectUri: 'http://localhost:5173/api/auth/google/callback' },
       alpaca: { apiKey: '', apiSecret: '' },
     });
   });
@@ -72,5 +72,21 @@ describe('loadConfig', () => {
         REFRESH_TOKEN_PEPPER: 'x'.repeat(32),
       }).accessTokenSecret,
     ).toBe(accessTokenSecret);
+  });
+
+  it('derives the production OAuth callback from the public web origin', () => {
+    const config = loadConfig({
+      ...localEnv,
+      NODE_ENV: 'production',
+      WEB_ORIGIN: 'https://marketpulse.example',
+      GOOGLE_CLIENT_ID: 'google-id',
+      GOOGLE_CLIENT_SECRET: 'google-secret',
+      GOOGLE_REDIRECT_URI: '',
+      ALPACA_API_KEY: 'alpaca-key',
+      ALPACA_API_SECRET: 'alpaca-secret',
+      ACCESS_TOKEN_SECRET: 'x'.repeat(32),
+      REFRESH_TOKEN_PEPPER: 'y'.repeat(32),
+    });
+    expect(config.google.redirectUri).toBe('https://marketpulse.example/api/auth/google/callback');
   });
 });

@@ -4,6 +4,7 @@ import { MemoryRouter } from 'react-router-dom';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { cleanup } from '@testing-library/react';
 import { makeStore } from '../store';
+import { httpBaseQuery } from '../api';
 import { AuthGate } from './AuthGate';
 
 const reply = (body: unknown, status = 200) => Promise.resolve(new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } }));
@@ -11,6 +12,26 @@ afterEach(() => { cleanup(); vi.restoreAllMocks(); });
 const renderGate = () => render(<Provider store={makeStore()}><MemoryRouter><AuthGate><div>private</div></AuthGate></MemoryRouter></Provider>);
 
 describe('startup gate', () => {
+  it('coalesces refresh rotation and retries concurrent requests after an expired access cookie', async () => {
+    let refreshes = 0;
+    let protectedCalls = 0;
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async input => {
+      const url = String(input);
+      if (url === '/api/auth/refresh') { refreshes += 1; return new Response(null, { status: 204 }); }
+      protectedCalls += 1;
+      if (protectedCalls <= 2) return reply({ error: { code: 'UNAUTHENTICATED' } }, 401);
+      return reply({ ok: true });
+    });
+    const apiContext = {} as Parameters<typeof httpBaseQuery>[1];
+    const [first, second] = await Promise.all([
+      httpBaseQuery('/overview', apiContext, {}),
+      httpBaseQuery('/symbols', apiContext, {}),
+    ]);
+    expect(first).toEqual({ data: { ok: true } });
+    expect(second).toEqual({ data: { ok: true } });
+    expect(refreshes).toBe(1);
+  });
+
   it('shows loading, then exact Alpaca setup guidance without requesting the session', async () => {
     const fetcher = vi.spyOn(globalThis, 'fetch').mockImplementation(() => reply({ configured: false, services: { mongodb: 'ready', googleOAuth: 'ready', alpaca: 'missing', tokens: 'ready' } }));
     renderGate();

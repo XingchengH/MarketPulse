@@ -14,7 +14,19 @@ export interface RuleVersion { _id?: string; ruleId: string; version: number; sn
 export interface AuditEvent { _id: string; actorId: string; action: string; resourceType: string; resourceId: string; before?: unknown; after?: unknown; createdAt: string }
 export interface ApiError { status: number | string; data?: { error?: { code?: string; message?: string } } }
 
-const httpBaseQuery: BaseQueryFn<string | FetchArgs, unknown, ApiError> = async value => {
+let refreshRequest: Promise<boolean> | undefined;
+export function refreshSession(): Promise<boolean> {
+  if (!refreshRequest) {
+    refreshRequest = fetch('/api/auth/refresh', { method: 'POST', credentials: 'include' })
+      .then(response => response.ok)
+      .catch(() => false)
+      .finally(() => { refreshRequest = undefined; });
+  }
+  return refreshRequest;
+}
+
+type HttpResult = { data: unknown; error?: never } | { error: ApiError; data?: never };
+async function request(value: string | FetchArgs): Promise<HttpResult> {
   const args = typeof value === 'string' ? { url: value } : value;
   const url = new URL(`/api${args.url}`, location.origin);
   for (const [key, item] of Object.entries(args.params ?? {})) if (item !== undefined) url.searchParams.set(key, String(item));
@@ -23,6 +35,13 @@ const httpBaseQuery: BaseQueryFn<string | FetchArgs, unknown, ApiError> = async 
     const data = response.status === 204 ? undefined : await response.json();
     return response.ok ? { data } : { error: { status: response.status, data } };
   } catch { return { error: { status: 'FETCH_ERROR' } }; }
+}
+
+export const httpBaseQuery: BaseQueryFn<string | FetchArgs, unknown, ApiError> = async value => {
+  const result = await request(value);
+  if (result.error?.status !== 401) return result;
+  if (!(await refreshSession())) return result;
+  return request(value);
 };
 
 export const api = createApi({

@@ -83,13 +83,14 @@ describe('Alpaca market data', () => {
 
   it('handles Alpaca status and subscription control acknowledgements', async () => {
     const sent: string[] = [];
+    const fetcher = vi.fn(async () => new Response(JSON.stringify({ is_open: false, next_open: 'a', next_close: 'b' }), { status: 200, headers: { 'Content-Type': 'application/json' } }));
     const listeners = new Map<string, (event: { data?: unknown }) => void>();
     let reconnect: (() => void) | undefined;
     const socket = {
       send: (value: string) => sent.push(value), close: vi.fn(() => listeners.get('close')?.({})),
       addEventListener: (type: 'open' | 'close' | 'message' | 'error', listener: (event: { data?: unknown }) => void) => { listeners.set(type, listener); },
     };
-    const provider = new AlpacaProvider({ apiKey: 'key', apiSecret: 'secret', socketFactory: () => socket, setTimeout: callback => { reconnect = callback; return 1; }, clearTimeout: vi.fn() });
+    const provider = new AlpacaProvider({ apiKey: 'key', apiSecret: 'secret', socketFactory: () => socket, fetch: fetcher as typeof fetch, setTimeout: callback => { reconnect = callback; return 1; }, clearTimeout: vi.fn() });
     await provider.connect(['AAPL']);
     expect(provider.state()).toBe('connecting');
     listeners.get('open')?.({});
@@ -100,6 +101,9 @@ describe('Alpaca market data', () => {
     expect(JSON.parse(sent[1])).toEqual({ action: 'subscribe', trades: ['AAPL'], quotes: ['AAPL'] });
     listeners.get('message')?.({ data: JSON.stringify([{ T: 'subscription', trades: ['AAPL'], quotes: ['AAPL'], bars: [] }]) });
     expect(provider.state()).toBe('connected');
+    await provider.getMarketClock();
+    expect(provider.state()).toBe('market_closed');
+    expect(fetcher).toHaveBeenCalledWith('https://paper-api.alpaca.markets/v2/clock', expect.any(Object));
     await provider.replaceSubscriptions(['MSFT']);
     expect(sent.slice(-2).map(value => JSON.parse(value))).toEqual([
       { action: 'unsubscribe', trades: ['AAPL'], quotes: ['AAPL'] },

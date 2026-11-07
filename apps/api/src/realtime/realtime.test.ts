@@ -62,6 +62,9 @@ describe('realtime server', () => {
   it('rejects websocket upgrades from a hostile Origin', async () => {
     const app = await fixture('viewer', 'viewer', 'https://dashboard.example');
     expect((await rejected(app.open('access_token=good', 'https://evil.example'))).message).toMatch(/websocket error/i);
+    const sameOriginProxy = app.open('access_token=good');
+    await connected(sameOriginProxy);
+    sameOriginProxy.close();
     const socket = app.open('access_token=good', 'https://dashboard.example');
     await connected(socket);
     await app.close();

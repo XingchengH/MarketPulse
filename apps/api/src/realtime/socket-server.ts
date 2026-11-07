@@ -23,7 +23,7 @@ function cookie(header: string | undefined, name: string): string | undefined {
 export function createRealtimeServer(httpServer: HttpServer, dependencies: RealtimeDependencies) {
   const server = new Server<Record<string, never>, RealtimeServerEvents, Record<string, never>, { user: RealtimeUser; accessToken: string }>(httpServer, {
     cors: dependencies.webOrigin ? { origin: dependencies.webOrigin, credentials: true } : undefined,
-    allowRequest: dependencies.webOrigin ? (request, callback) => callback(null, request.headers.origin === dependencies.webOrigin) : undefined,
+    allowRequest: dependencies.webOrigin ? (request, callback) => callback(null, !request.headers.origin || request.headers.origin === dependencies.webOrigin) : undefined,
     serveClient: false,
   });
   server.use(async (socket, next) => {

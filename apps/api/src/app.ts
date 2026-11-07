@@ -36,6 +36,7 @@ export interface AppDependencies {
   };
   marketData?: MarketDataApi;
   monitoring?: { rules?: RuleService; alerts?: AlertService; watchlist?: WatchlistService };
+  staticDir?: string;
 }
 
 export function createApp(dependencies: AppDependencies): Express {
@@ -69,6 +70,13 @@ export function createApp(dependencies: AppDependencies): Express {
       app.use('/api/alerts', requireUser(tokens), createAlertsRouter(resolveRole, dependencies.monitoring.alerts));
       app.use('/api/audit', requireUser(tokens), createAuditRouter(resolveRole));
     }
+  }
+  if (dependencies.staticDir) {
+    app.use(express.static(dependencies.staticDir));
+    app.use((request, response, next) => {
+      if (request.method !== 'GET' || request.path.startsWith('/api') || request.path.startsWith('/health') || !request.accepts('html')) return next();
+      return response.sendFile('index.html', { root: dependencies.staticDir });
+    });
   }
   app.use(notFound);
   app.use(createErrorHandler(dependencies.logger ?? console));

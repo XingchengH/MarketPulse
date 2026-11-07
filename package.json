@@ -4,7 +4,7 @@
   "version": "0.1.0",
   "packageManager": "pnpm@11.25.0",
   "scripts": {
-    "dev": "pnpm --parallel --filter @marketpulse/api --filter @marketpulse/web dev",
+    "dev": "pnpm --filter @marketpulse/contracts build && pnpm --parallel --filter @marketpulse/contracts --filter @marketpulse/api --filter @marketpulse/web dev",
     "build": "pnpm -r build",
     "test": "pnpm -r --filter '!@marketpulse/e2e' test",
     "e2e": "pnpm --filter @marketpulse/e2e test",

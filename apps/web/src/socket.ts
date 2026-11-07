@@ -1,6 +1,6 @@
 import { io, type Socket } from 'socket.io-client';
 import type { AppStore } from './store';
-import { api, type Overview, type SymbolSnapshot } from './api';
+import { api, refreshSession, type Overview, type SymbolSnapshot } from './api';
 
 type LiveSocket = Pick<Socket, 'on' | 'close' | 'io'>;
 export function bindSocket(store: AppStore, socket: LiveSocket): () => void {
@@ -12,4 +12,21 @@ export function bindSocket(store: AppStore, socket: LiveSocket): () => void {
   socket.io.on('reconnect', () => store.dispatch(api.util.invalidateTags(['Overview', 'Symbols', 'Alerts', 'Rules'])));
   return () => socket.close();
 }
-export function connectSocket(store: AppStore): () => void { return bindSocket(store, io({ path: '/socket.io', withCredentials: true })); }
+export function connectSocket(store: AppStore): () => void {
+  const socket = io({ path: '/socket.io', withCredentials: true });
+  const unbind = bindSocket(store, socket);
+  let renewing = false;
+  const renew = async () => {
+    if (renewing) return;
+    renewing = true;
+    try {
+      if (await refreshSession()) {
+        socket.disconnect();
+        socket.connect();
+      }
+    } finally { renewing = false; }
+  };
+  socket.on('disconnect', reason => { if (reason === 'io server disconnect') void renew(); });
+  const timer = window.setInterval(() => void renew(), 10 * 60 * 1000);
+  return () => { window.clearInterval(timer); unbind(); };
+}

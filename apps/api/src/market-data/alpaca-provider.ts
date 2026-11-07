@@ -14,19 +14,21 @@ export interface AlpacaProviderOptions {
   fetch?: typeof fetch;
   setTimeout?: (callback: () => void, delay: number) => unknown;
   clearTimeout?: (timer: unknown) => void;
+  tradingBaseUrl?: string;
 }
 
 export class AlpacaProvider implements MarketDataProvider {
   readonly name = 'alpaca' as const;
   private providerState: ProviderState = 'unconfigured';
-  private socket?: SocketLike; private desiredSymbols: string[] = []; private activeSymbols: string[] = []; private stopped = false;
+  private socket?: SocketLike; private desiredSymbols: string[] = []; private activeSymbols: string[] = []; private stopped = false; private streamAuthenticated = false;
   private generation = 0; private reconnectTimer?: unknown;
   private readonly events = new Set<(event: MarketEvent) => void>(); private readonly operational = new Set<(event: OperationalEvent) => void>();
   private readonly backoff = new ReconnectBackoff();
   private readonly clock: MarketClockCache;
   constructor(private readonly options: AlpacaProviderOptions) {
+    const tradingBaseUrl = options.tradingBaseUrl ?? 'https://paper-api.alpaca.markets';
     this.clock = new MarketClockCache(async () => {
-      const response = await (options.fetch ?? fetch)('https://api.alpaca.markets/v2/clock', { headers: { 'APCA-API-KEY-ID': options.apiKey, 'APCA-API-SECRET-KEY': options.apiSecret } });
+      const response = await (options.fetch ?? fetch)(`${tradingBaseUrl}/v2/clock`, { headers: { 'APCA-API-KEY-ID': options.apiKey, 'APCA-API-SECRET-KEY': options.apiSecret } });
       if (!response.ok) throw new Error(`Alpaca clock request failed (${response.status})`);
       const body = await response.json() as { is_open: boolean; next_open: string; next_close: string };
       return { isOpen: body.is_open, nextOpen: body.next_open, nextClose: body.next_close };
@@ -37,20 +39,20 @@ export class AlpacaProvider implements MarketDataProvider {
   async connect(symbols: string[]): Promise<void> {
     this.desiredSymbols = [...new Set(symbols.map(value => value.toUpperCase()))];
     if (!this.options.apiKey || !this.options.apiSecret) { this.transition('unconfigured'); return; }
-    this.stopped = false; this.cancelReconnect(); const generation = ++this.generation; this.transition(this.socket ? 'reconnecting' : 'connecting');
+    this.stopped = false; this.streamAuthenticated = false; this.cancelReconnect(); const generation = ++this.generation; this.transition(this.socket ? 'reconnecting' : 'connecting');
     const socketFactory = this.options.socketFactory ?? ((url: string) => new WebSocket(url) as unknown as SocketLike);
     const socket = socketFactory('wss://stream.data.alpaca.markets/v2/iex'); this.socket = socket;
     const current = () => generation === this.generation && socket === this.socket;
     socket.addEventListener('open', () => { if (current()) socket.send(JSON.stringify({ action: 'auth', key: this.options.apiKey, secret: this.options.apiSecret })); });
     socket.addEventListener('message', event => { if (current()) this.handleMessage(event.data); });
     socket.addEventListener('error', () => { if (current()) for (const listener of this.operational) listener({ type: 'error', message: 'Alpaca stream error' }); });
-    socket.addEventListener('close', () => { if (!current()) return; this.backoff.disconnected(); this.socket = undefined; if (!this.stopped) this.scheduleReconnect(); });
+    socket.addEventListener('close', () => { if (!current()) return; this.backoff.disconnected(); this.streamAuthenticated = false; this.socket = undefined; if (!this.stopped) this.scheduleReconnect(); });
   }
   private handleMessage(raw: unknown) {
     try {
       const batch = JSON.parse(typeof raw === 'string' ? raw : String(raw)) as Array<Record<string, unknown>>;
       for (const message of batch) {
-        if (message.T === 'success' && message.msg === 'authenticated') { this.transition('connected'); this.backoff.connected(); this.sendSubscriptions(); continue; }
+        if (message.T === 'success' && message.msg === 'authenticated') { this.streamAuthenticated = true; this.transition('connected'); this.backoff.connected(); this.sendSubscriptions(); continue; }
         if (message.T === 'success' && message.msg === 'connected') { this.transition('connecting'); continue; }
         if (message.T === 'subscription') {
           const trades = Array.isArray(message.trades) ? message.trades.filter((value): value is string => typeof value === 'string') : [];
@@ -69,12 +71,12 @@ export class AlpacaProvider implements MarketDataProvider {
   private sendSubscriptions() { if (this.socket) { this.socket.send(JSON.stringify({ action: 'subscribe', trades: this.desiredSymbols, quotes: this.desiredSymbols })); this.activeSymbols = [...this.desiredSymbols]; } }
   async replaceSubscriptions(symbols: string[]): Promise<void> {
     const previous = this.activeSymbols; this.desiredSymbols = [...new Set(symbols.map(value => value.toUpperCase()))];
-    if (this.providerState === 'connected' && this.socket) {
+    if (this.streamAuthenticated && this.socket) {
       if (previous.length) this.socket.send(JSON.stringify({ action: 'unsubscribe', trades: previous, quotes: previous }));
       this.sendSubscriptions();
     }
   }
-  async disconnect(): Promise<void> { this.stopped = true; this.cancelReconnect(); this.generation += 1; const socket = this.socket; this.socket = undefined; socket?.close(); this.transition(this.options.apiKey && this.options.apiSecret ? 'unavailable' : 'unconfigured'); }
+  async disconnect(): Promise<void> { this.stopped = true; this.streamAuthenticated = false; this.cancelReconnect(); this.generation += 1; const socket = this.socket; this.socket = undefined; socket?.close(); this.transition(this.options.apiKey && this.options.apiSecret ? 'unavailable' : 'unconfigured'); }
   onEvent(listener: (event: MarketEvent) => void) { this.events.add(listener); return () => this.events.delete(listener); }
   onOperationalEvent(listener: (event: OperationalEvent) => void) { this.operational.add(listener); return () => this.operational.delete(listener); }
   async getMarketClock(): Promise<MarketClock> {
@@ -90,7 +92,8 @@ export class AlpacaProvider implements MarketDataProvider {
     }
   }
   async lookupAsset(symbol: string): Promise<{ symbol: string; tradable: boolean } | null> {
-    const response = await (this.options.fetch ?? fetch)(`https://api.alpaca.markets/v2/assets/${encodeURIComponent(symbol.toUpperCase())}`, { headers: { 'APCA-API-KEY-ID': this.options.apiKey, 'APCA-API-SECRET-KEY': this.options.apiSecret } });
+    const tradingBaseUrl = this.options.tradingBaseUrl ?? 'https://paper-api.alpaca.markets';
+    const response = await (this.options.fetch ?? fetch)(`${tradingBaseUrl}/v2/assets/${encodeURIComponent(symbol.toUpperCase())}`, { headers: { 'APCA-API-KEY-ID': this.options.apiKey, 'APCA-API-SECRET-KEY': this.options.apiSecret } });
     if (response.status === 404) return null;
     if (!response.ok) throw new Error(`Alpaca asset request failed (${response.status})`);
     const body = await response.json() as { symbol?: string; tradable?: boolean };

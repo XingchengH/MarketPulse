@@ -1,4 +1,5 @@
 import { createServer } from 'node:http';
+import { fileURLToPath } from 'node:url';
 import { createApp } from './app.js';
 import { loadConfig } from './config.js';
 import { connectDatabase } from './db.js';
@@ -21,9 +22,10 @@ import { WatchlistService, mongooseWatchlistRepository } from './monitoring/watc
 import { BootstrapAttempt } from './bootstrap-attempt.js';
 
 const config = loadConfig();
+const staticDir = config.nodeEnv === 'production' ? fileURLToPath(new URL('../../web/dist', import.meta.url)) : undefined;
 const database = connectDatabase(config.mongodbUri);
 const marketProvider = new AlpacaProvider({ apiKey: config.alpaca.apiKey, apiSecret: config.alpaca.apiSecret });
-let application = createApp({ config, database, providerState: () => marketProvider.state() });
+let application = createApp({ config, database, providerState: () => marketProvider.state(), staticDir });
 const server = createServer((request, response) => application(request, response));
 let shutdown: ((signal: string) => Promise<void>) | undefined;
 let initializing = false;
@@ -89,7 +91,7 @@ async function initialize(): Promise<void> {
     attempt.defer(() => minuteWriter.stop());
     monitoring.start();
     attempt.defer(() => monitoring.stop());
-    const fullApplication = createApp({ config, database, providerState: () => marketProvider.state(), auth: { provider, repository, tokens }, marketData, monitoring: { rules: ruleService, alerts: alertService, watchlist: watchlistService } });
+    const fullApplication = createApp({ config, database, providerState: () => marketProvider.state(), auth: { provider, repository, tokens }, marketData, monitoring: { rules: ruleService, alerts: alertService, watchlist: watchlistService }, staticDir });
     // Socket.IO is attached only after every fallible bootstrap step above has succeeded.
     const realtime = createRealtimeServer(server, { tokens, findCurrentUser: id => repository.findUserById(id), webOrigin: config.webOrigin });
     publisher = new RealtimePublisher(realtime);

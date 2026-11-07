@@ -43,7 +43,6 @@ const environmentSchema = z
     for (const field of [
       'GOOGLE_CLIENT_ID',
       'GOOGLE_CLIENT_SECRET',
-      'GOOGLE_REDIRECT_URI',
       'ALPACA_API_KEY',
       'ALPACA_API_SECRET',
     ] as const) {
@@ -70,6 +69,7 @@ export interface AppConfig {
 
 export function loadConfig(env: Record<string, string | undefined> = process.env): AppConfig {
   const parsed = environmentSchema.parse(env);
+  const googleRedirectUri = parsed.GOOGLE_REDIRECT_URI || new URL('/api/auth/google/callback', parsed.WEB_ORIGIN).toString();
   return {
     nodeEnv: parsed.NODE_ENV,
     port: parsed.PORT,
@@ -78,7 +78,7 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
     google: {
       clientId: parsed.GOOGLE_CLIENT_ID,
       clientSecret: parsed.GOOGLE_CLIENT_SECRET,
-      redirectUri: parsed.GOOGLE_REDIRECT_URI,
+      redirectUri: googleRedirectUri,
     },
     alpaca: { apiKey: parsed.ALPACA_API_KEY, apiSecret: parsed.ALPACA_API_SECRET },
     accessTokenSecret: parsed.ACCESS_TOKEN_SECRET,

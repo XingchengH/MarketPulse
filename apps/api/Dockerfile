@@ -11,6 +11,7 @@ ENV NODE_ENV=production
 WORKDIR /app
 RUN addgroup -S marketpulse && adduser -S marketpulse -G marketpulse
 COPY --from=build --chown=marketpulse:marketpulse /app/node_modules ./node_modules
+COPY --from=build --chown=marketpulse:marketpulse /app/apps/api/node_modules ./apps/api/node_modules
 COPY --from=build --chown=marketpulse:marketpulse /app/apps/api/dist ./apps/api/dist
 COPY --from=build --chown=marketpulse:marketpulse /app/apps/api/package.json ./apps/api/package.json
 COPY --from=build --chown=marketpulse:marketpulse /app/packages/contracts ./packages/contracts
