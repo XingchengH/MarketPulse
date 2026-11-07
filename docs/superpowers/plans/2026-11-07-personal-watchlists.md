@@ -32,6 +32,7 @@
 - `apps/api/src/routes/watchlist.ts`, `apps/api/src/routes/market-data.ts`, `apps/api/src/routes/alerts.ts` — current-user ownership and filtering.
 - `apps/api/src/realtime/socket-server.ts`, `apps/api/src/realtime/publisher.ts` — symbol rooms and user room refresh.
 - `apps/api/src/app.ts`, `apps/api/src/server.ts` — wire services, migration, union subscriptions, and personalized APIs.
+- `apps/api/src/routes/auth.ts`, `apps/api/src/auth/google-provider.ts`, `apps/web/src/components/AppShell.tsx`, `apps/web/src/auth/AuthGate.tsx` — sign-out and explicit Google account switching.
 - `apps/web/src/api.ts`, `apps/web/src/socket.ts`, `apps/web/src/dashboard/FeedsPage.tsx`, `apps/web/src/dashboard/OverviewPage.tsx`, `apps/web/src/alerts/AlertsPage.tsx`, `apps/web/src/styles.css` — personal watchlist UI and cache updates.
 - `apps/e2e/tests/harness.ts`, `apps/e2e/tests/marketpulse.spec.ts` — two-user ownership and realtime coverage.
 - `README.md`, `docs/operations.md` — usage, migration, limits, and production verification.
@@ -535,7 +536,84 @@ git add apps/api/src apps/web/src/admin README.md docs/operations.md
 git commit -m "chore: migrate global monitoring to personal watchlists"
 ```
 
-### Task 9: Two-User E2E, Full Verification, and Deployment
+### Task 9: Sign Out and Switch Google Account
+
+**Files:**
+- Modify: `apps/api/src/auth/google-provider.ts`
+- Modify: `apps/api/src/routes/auth.ts`
+- Modify: `apps/api/src/auth/auth.test.ts`
+- Modify: `apps/api/src/auth/google-provider.test.ts`
+- Modify: `apps/api/src/test-helpers/fake-google.ts`
+- Modify: `apps/web/src/api.ts`
+- Modify: `apps/web/src/components/AppShell.tsx`
+- Modify: `apps/web/src/auth/AuthGate.tsx`
+- Modify: `apps/web/src/components/AppShell.test.tsx`
+- Modify: `apps/web/src/auth/auth.test.tsx`
+- Modify: `apps/web/src/styles.css`
+
+- [ ] **Step 1: Write failing backend account-switch tests**
+
+Extend the identity-provider boundary to accept an account-choice option and verify it changes only the switch flow:
+
+```ts
+expect(provider.authorizationUrl('state', { selectAccount: false })).not.toContain('prompt=select_account');
+expect(provider.authorizationUrl('state', { selectAccount: true })).toContain('prompt=select_account');
+await agent.post('/api/auth/switch-account').set('Cookie', refreshCookie).expect(204);
+expect(repository.revokeFamily).toHaveBeenCalledWith(familyId);
+```
+
+- [ ] **Step 2: Run backend auth tests and verify failure**
+
+Run: `corepack pnpm --filter @marketpulse/api test -- auth.test.ts google-provider.test.ts`
+
+Expected: FAIL because the provider option and switch-account route do not exist.
+
+- [ ] **Step 3: Implement explicit account selection**
+
+Change the interface to:
+
+```ts
+authorizationUrl(state: string, options?: { selectAccount?: boolean }): string;
+```
+
+When `selectAccount` is true, set `prompt=select_account` on the Google authorization URL. Add `GET /api/auth/google?select_account=true` validation so only the literal `true` enables it. Add `POST /api/auth/switch-account` using the same refresh-family revocation and cookie clearing helper as logout; return `204` so the client controls the subsequent navigation.
+
+- [ ] **Step 4: Write failing account-menu tests**
+
+Render `AppShell` with an authenticated user. Open the profile menu and assert `Switch account` and `Sign out` are keyboard-accessible. For sign out, assert the logout mutation runs, RTK Query state resets, and the login screen appears. For switch account, assert session cleanup completes before `location.assign('/api/auth/google?select_account=true')`.
+
+- [ ] **Step 5: Run web auth tests and verify failure**
+
+Run: `corepack pnpm --filter @marketpulse/web test -- AppShell.test.tsx auth.test.tsx`
+
+Expected: FAIL because the profile is static and there is no logout mutation.
+
+- [ ] **Step 6: Implement account menu and client cleanup**
+
+Add a `logout` mutation to RTK Query and a reusable `clearClientSession` action sequence:
+
+```ts
+await logout().unwrap();
+dispatch(api.util.resetApiState());
+onSessionEnded?.();
+```
+
+Expose the profile as an ARIA menu button containing the name, email, role, `Switch account`, and `Sign out`. Disable actions while cleanup is pending and show an inline retry message on failure. `AuthGate` must return to `LoginPage` after cache reset. Socket teardown follows component unmount; never leave an authenticated socket running after logout.
+
+- [ ] **Step 7: Run backend and web tests**
+
+Run: `corepack pnpm --filter @marketpulse/api test -- auth.test.ts google-provider.test.ts && corepack pnpm --filter @marketpulse/web test -- AppShell.test.tsx auth.test.tsx`
+
+Expected: all account-switch and logout tests pass.
+
+- [ ] **Step 8: Commit**
+
+```bash
+git add apps/api/src/auth apps/api/src/routes/auth.ts apps/api/src/test-helpers/fake-google.ts apps/web/src
+git commit -m "feat: add sign out and Google account switching"
+```
+
+### Task 10: Two-User E2E, Full Verification, and Deployment
 
 **Files:**
 - Modify: `apps/e2e/tests/harness.ts`
@@ -591,4 +669,4 @@ Push the feature branch, create a pull request, review the complete diff and CI 
 
 - [ ] **Step 8: Verify production behavior**
 
-With two approved test users, verify Google login, personal search, add/remove persistence, ownership isolation, `/health/live`, `/health/ready`, and the Render logs. During market hours confirm real IEX events for a newly added eligible symbol; outside market hours confirm honest `market_closed` state. Never print or capture secret environment values.
+With two approved test users, verify Google login, deliberate account switching, sign out, personal search, add/remove persistence, ownership isolation, `/health/live`, `/health/ready`, and the Render logs. During market hours confirm real IEX events for a newly added eligible symbol; outside market hours confirm honest `market_closed` state. Never print or capture secret environment values.

@@ -87,6 +87,8 @@ The personal watchlist table preserves the current price, spread, throughput, la
 
 The header continues to show the authenticated Google identity and role. Watchlist customization is available to viewer, operator, and admin roles because it affects only personal scope.
 
+The profile area becomes an accessible account menu with two actions. `Sign out` revokes the current refresh-token family, clears authentication cookies and client caches, disconnects the realtime socket, and returns to the login screen. `Switch account` performs the same local session cleanup and then starts Google OAuth with `prompt=select_account`, ensuring Google shows its account chooser instead of silently reusing the previous identity. Ordinary login remains frictionless and does not force the chooser.
+
 ## Migration and Rollout
 
 The migration creates starter entries for each existing user whose `watchlistInitializedAt` is absent, then records the initialization timestamp. The operation is idempotent and uses unique indexes so retries cannot create duplicates.
@@ -115,6 +117,8 @@ Realtime tests connect two users with overlapping and non-overlapping lists and 
 
 React tests cover debounced search, result states, add/remove behavior, the counter, limit messaging, provider errors, empty state, and filtering across overview, feeds, metrics, and alerts.
 
+Authentication tests cover the account menu, logout cache cleanup, refresh-token-family revocation, socket teardown, and the `prompt=select_account` authorization URL used only by the switch-account flow.
+
 The controlled end-to-end scenario creates two authenticated users, customizes their lists, verifies persistence across reloads, emits provider events for shared and private symbols, and asserts UI and socket isolation. Production verification confirms real asset search, a persisted add/remove cycle, Google-authenticated ownership, and real Alpaca IEX behavior when the market is open.
 
 ## Acceptance Criteria
@@ -127,4 +131,5 @@ The controlled end-to-end scenario creates two authenticated users, customizes t
 - REST and Socket.IO responses do not expose another user's watchlist membership or symbol data outside the current user's scope.
 - Overview, Live Feeds, metrics, symbol details, and alerts reflect the current user's watchlist.
 - Search and monitoring report honest provider, market, and persistence failures without synthetic data.
+- Users can sign out or deliberately switch Google accounts from the authenticated profile menu.
 - Automated tests and production health checks pass before deployment.
