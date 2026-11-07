@@ -1,4 +1,3 @@
-import { MongoClient } from 'mongodb';
 import mongoose from 'mongoose';
 
 export interface Database {
@@ -21,12 +20,14 @@ interface DatabaseOptions {
 }
 
 export function connectDatabase(uri: string, options: DatabaseOptions = {}): Database {
-  const client = options.client ?? new MongoClient(uri);
-  const ownsClient = options.client === undefined;
+  const injectedClient = options.client;
+  let client = injectedClient;
+  const ownsClient = injectedClient === undefined;
   const pingTimeoutMs = options.pingTimeoutMs ?? 1_000;
 
   async function probe(): Promise<boolean> {
     try {
+      if (!client) return false;
       const signal = AbortSignal.timeout(pingTimeoutMs);
       await client.db().command({ ping: 1 }, { maxTimeMS: pingTimeoutMs, signal });
       return true;
@@ -37,10 +38,11 @@ export function connectDatabase(uri: string, options: DatabaseOptions = {}): Dat
 
   return {
     async connect() {
-      await client.connect();
       if (ownsClient) {
-        // Mongoose and the app may resolve patch-level copies of the MongoDB driver.
-        mongoose.connection.setClient(client as unknown as Parameters<typeof mongoose.connection.setClient>[0]);
+        await mongoose.connect(uri);
+        client = mongoose.connection.getClient();
+      } else {
+        await injectedClient!.connect();
       }
       if (!(await probe())) {
         throw new Error('MongoDB readiness probe failed during connection');
@@ -48,7 +50,7 @@ export function connectDatabase(uri: string, options: DatabaseOptions = {}): Dat
     },
     async disconnect() {
       if (ownsClient) await mongoose.disconnect();
-      else await client.close();
+      else await client?.close();
     },
     isReady: probe,
   };

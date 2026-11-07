@@ -8,7 +8,7 @@ Requirements: Node 22+, pnpm 11.25, and MongoDB 8 configured as a replica set (t
 
 1. Copy `.env.example` to `.env` and create unique token secrets of at least 32 characters.
 2. Follow [Google OAuth setup](docs/google-oauth-setup.md) and [Alpaca setup](docs/alpaca-setup.md).
-3. Start a local replica-set MongoDB with `docker compose up -d mongodb`. The local URI is `mongodb://localhost:27017/marketpulse?replicaSet=rs0`.
+3. Start a local replica-set MongoDB with `docker compose up -d mongodb`. For a host-run API, use `mongodb://localhost:27017/marketpulse?replicaSet=rs0&directConnection=true` so the driver does not try to resolve the Compose-only `mongodb` hostname.
 4. Run `pnpm install --frozen-lockfile`, then `pnpm dev`.
 5. Open `http://localhost:5173`. The API listens on `http://localhost:3000`; Google must redirect exactly to `http://localhost:3000/api/auth/google/callback`.
 
