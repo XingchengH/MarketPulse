@@ -1,7 +1,7 @@
 import type { MarketEvent, ProviderState } from '@marketpulse/contracts';
 import { normalizeAlpacaMessage } from './normalizer.js';
 import { MarketClockCache } from './market-clock.js';
-import type { MarketClock, MarketDataProvider, OperationalEvent } from './provider.js';
+import type { MarketClock, MarketDataProvider, OperationalEvent, ProviderAsset } from './provider.js';
 import { ReconnectBackoff } from './reconnect.js';
 
 interface SocketLike {
@@ -99,6 +99,27 @@ export class AlpacaProvider implements MarketDataProvider {
     const body = await response.json() as { symbol?: string; tradable?: boolean };
     return typeof body.symbol === 'string' ? { symbol: body.symbol, tradable: body.tradable === true } : null;
   }
+  async listAssets(): Promise<ProviderAsset[]> {
+    const tradingBaseUrl = this.options.tradingBaseUrl ?? 'https://paper-api.alpaca.markets';
+    const response = await (this.options.fetch ?? fetch)(`${tradingBaseUrl}/v2/assets?status=active&asset_class=us_equity`, { headers: { 'APCA-API-KEY-ID': this.options.apiKey, 'APCA-API-SECRET-KEY': this.options.apiSecret } });
+    if (!response.ok) throw new Error(`Alpaca assets request failed (${response.status})`);
+    const body: unknown = await response.json();
+    if (!Array.isArray(body)) throw new Error('Invalid Alpaca assets response');
+    const assets: ProviderAsset[] = [];
+    for (const value of body) {
+      if (!value || typeof value !== 'object') continue;
+      const record = value as Record<string, unknown>;
+      if (record.class !== 'us_equity' || record.status !== 'active') continue;
+      if (typeof record.symbol !== 'string' || typeof record.name !== 'string' || typeof record.tradable !== 'boolean') continue;
+      const symbol = record.symbol.trim();
+      const name = record.name.trim();
+      if (!/^[A-Za-z0-9][A-Za-z0-9.-]*$/.test(symbol) || !name) continue;
+      if (record.exchange !== undefined && typeof record.exchange !== 'string') continue;
+      const exchange = typeof record.exchange === 'string' ? record.exchange.trim() : undefined;
+      assets.push({ symbol, name, ...(exchange ? { exchange } : {}), assetClass: 'us_equity', status: 'active', tradable: record.tradable });
+    }
+    return assets;
+  }
 }
 
 export class FakeMarketDataProvider implements MarketDataProvider {
@@ -111,5 +132,6 @@ export class FakeMarketDataProvider implements MarketDataProvider {
   onOperationalEvent(_listener: (event: OperationalEvent) => void) { return () => undefined; }
   async getMarketClock() { return { isOpen: true, nextOpen: '', nextClose: '' }; }
   async lookupAsset(symbol: string) { return { symbol: symbol.toUpperCase(), tradable: true }; }
+  async listAssets(): Promise<ProviderAsset[]> { return []; }
   emit(event: MarketEvent) { for (const listener of this.listeners) listener(event); }
 }

@@ -8,6 +8,46 @@ import { MinuteMetricWriter } from './minute-writer.js';
 import { bootstrapDefaultWatchlist, DEFAULT_WATCHLIST } from '../models/watchlist.js';
 
 describe('Alpaca market data', () => {
+  it('lists only well-formed active US equities using the trading API and credential headers', async () => {
+    const record = { symbol: 'AAPL', name: 'Apple Inc.', exchange: 'NASDAQ', class: 'us_equity', status: 'active', tradable: true };
+    const fetcher = vi.fn(async () => Response.json([
+      record, { ...record, symbol: 'HALT', tradable: false },
+      { ...record, symbol: 'NOEX', exchange: undefined },
+      { ...record, status: 'inactive' }, { ...record, class: 'crypto' },
+      { ...record, symbol: '' }, { ...record, symbol: 'BAD/SYMBOL' }, { ...record, name: ' ' },
+      { ...record, tradable: 'true' }, { ...record, status: undefined }, { ...record, exchange: 123 }, null,
+    ]));
+    const provider = new AlpacaProvider({ apiKey: 'key', apiSecret: 'secret', tradingBaseUrl: 'https://api.alpaca.markets', fetch: fetcher as typeof fetch });
+    await expect(provider.listAssets()).resolves.toEqual([
+      { symbol: 'AAPL', name: 'Apple Inc.', exchange: 'NASDAQ', assetClass: 'us_equity', status: 'active', tradable: true },
+      { symbol: 'HALT', name: 'Apple Inc.', exchange: 'NASDAQ', assetClass: 'us_equity', status: 'active', tradable: false },
+      { symbol: 'NOEX', name: 'Apple Inc.', assetClass: 'us_equity', status: 'active', tradable: true },
+    ]);
+    expect(fetcher).toHaveBeenCalledExactlyOnceWith('https://api.alpaca.markets/v2/assets?status=active&asset_class=us_equity', {
+      headers: { 'APCA-API-KEY-ID': 'key', 'APCA-API-SECRET-KEY': 'secret' },
+    });
+  });
+
+  it('surfaces asset-list failures without exposing response details or credentials', async () => {
+    const fetcher = vi.fn(async () => new Response('sensitive response detail', { status: 503 }));
+    const provider = new AlpacaProvider({ apiKey: 'key', apiSecret: 'secret', fetch: fetcher as typeof fetch });
+    await expect(provider.listAssets()).rejects.toThrow(/^Alpaca assets request failed \(503\)$/);
+    expect(fetcher.mock.calls[0][0]).toBe('https://paper-api.alpaca.markets/v2/assets?status=active&asset_class=us_equity');
+  });
+
+  it('rejects a malformed asset-list payload rather than caching an empty directory', async () => {
+    const provider = new AlpacaProvider({ apiKey: 'key', apiSecret: 'secret', fetch: vi.fn(async () => Response.json({ message: 'unexpected' })) as typeof fetch });
+    await expect(provider.listAssets()).rejects.toThrow('Invalid Alpaca assets response');
+  });
+
+  it('preserves single-asset lookup behavior', async () => {
+    const fetcher = vi.fn().mockResolvedValueOnce(Response.json({ symbol: 'BRK.B', tradable: true })).mockResolvedValueOnce(new Response(null, { status: 404 }));
+    const provider = new AlpacaProvider({ apiKey: 'key', apiSecret: 'secret', fetch: fetcher as typeof fetch });
+    await expect(provider.lookupAsset('brk.b')).resolves.toEqual({ symbol: 'BRK.B', tradable: true });
+    expect(fetcher).toHaveBeenCalledWith('https://paper-api.alpaca.markets/v2/assets/BRK.B', expect.any(Object));
+    await expect(provider.lookupAsset('MISSING')).resolves.toBeNull();
+  });
+
   it('normalizes a trade exactly', () => {
     expect(normalizeAlpacaMessage({ T: 't', S: 'AAPL', p: 201.5, s: 3, t: '2026-11-05T17:00:00.000000Z' }, new Date('2026-11-05T17:00:00.040Z'))).toEqual({
       provider: 'alpaca', feed: 'iex', symbol: 'AAPL', type: 'trade',
