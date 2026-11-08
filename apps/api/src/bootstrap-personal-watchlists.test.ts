@@ -12,7 +12,8 @@ const setup = () => {
   const initializeUser = vi.fn(async (id: string) => { initialized.add(id); order.push(id); });
   const union = vi.fn(async () => { order.push('union'); return initialized.size ? ['msft', 'AAPL'] : []; });
   const provider = { connect: vi.fn(async (_symbols: string[]) => { order.push('connect'); }), disconnect: vi.fn(async () => undefined), replaceSubscriptions: vi.fn(async (_symbols: string[]) => undefined) };
-  const dependencies = { ensureIndexes, usersMissingInitialization, initializeUser, provider, batchSize: 2 };
+  const onMigrationComplete = vi.fn();
+  const dependencies = { ensureIndexes, usersMissingInitialization, initializeUser, provider, batchSize: 2, onMigrationComplete };
   const start = async () => {
     const attempt = new BootstrapAttempt();
     const coordinator = new SubscriptionCoordinator({ union }, provider);
@@ -33,6 +34,7 @@ describe('personal watchlist bootstrap', () => {
     expect(state.usersMissingInitialization.mock.calls).toEqual([[undefined, 2], ['02', 2], ['03', 2]]);
     expect(state.union).toHaveBeenCalledOnce();
     expect(state.provider.connect).toHaveBeenCalledExactlyOnceWith(['AAPL', 'MSFT']);
+    expect(state.onMigrationComplete).toHaveBeenCalledExactlyOnceWith({ initializedUsers: 3, batches: 2 });
     await coordinator.refresh();
     expect(state.provider.replaceSubscriptions).not.toHaveBeenCalled();
   });
@@ -43,10 +45,19 @@ describe('personal watchlist bootstrap', () => {
     await expect(state.start()).rejects.toThrow('initialization failed');
     expect(state.provider.connect).not.toHaveBeenCalled();
     expect(state.union).not.toHaveBeenCalled();
+    expect(state.onMigrationComplete).not.toHaveBeenCalled();
     await state.start();
     expect(state.initializeUser.mock.calls.map(([id]) => id)).toEqual(['01', '02', '02', '03']);
     expect(state.initialized.size).toBe(3);
     expect(state.provider.connect).toHaveBeenCalledOnce();
+    expect(state.onMigrationComplete).toHaveBeenCalledExactlyOnceWith({ initializedUsers: 2, batches: 1 });
+  });
+
+  it.each([0, -1, 1.5, Infinity])('rejects an unsafe batch size %s before querying users', async batchSize => {
+    const state = setup();
+    await expect(bootstrapPersonalWatchlists({ ...state, batchSize, coordinator: new SubscriptionCoordinator({ union: state.union }, state.provider), attempt: new BootstrapAttempt() })).rejects.toThrow('Invalid migration batch size');
+    expect(state.usersMissingInitialization).not.toHaveBeenCalled();
+    expect(state.provider.connect).not.toHaveBeenCalled();
   });
 
   it('does not initialize or connect after index failure, and retries cleanly', async () => {

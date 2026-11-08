@@ -8,6 +8,7 @@ import { AuthInvariant } from '../models/auth-invariant.js';
 import { User } from '../models/user.js';
 import { UserWatchlistEntry } from '../models/user-watchlist-entry.js';
 import { PersonalWatchlistService, STARTER_SYMBOLS } from './personal-watchlist-service.js';
+import { createWatchlistInitializationReader } from '../bootstrap-personal-watchlists.js';
 
 describe('personal watchlist persistence', () => {
   let replicaSet: MongoMemoryReplSet;
@@ -81,6 +82,24 @@ describe('personal watchlist persistence', () => {
     expect(await service.list(user)).toEqual({ entries: [], used: 0, limit: watchlistLimit });
     expect((await service.remove(user, 'AAPL', audit())).status).toBe('not_found');
     await expect(service.initializeUser(String(new Types.ObjectId()))).rejects.toThrow(/user.*not found/i);
+  });
+
+  it('reads migration users in bounded ID order, skips initialized empty lists, and fixes the startup upper bound', async () => {
+    const ids = [1, 2, 3, 4, 5].map(id => new Types.ObjectId(id.toString(16).padStart(24, '0')));
+    for (const id of [...ids.slice(0, 4)].reverse()) {
+      await User.create({ _id: id, googleSubject: String(id), email: `${id}@example.com`, name: 'Migration user', ...(id.equals(ids[1]) ? { watchlistInitializedAt: new Date() } : {}) });
+    }
+    // Both a missing field and an explicit null marker require initialization.
+    await User.updateOne({ _id: ids[2] }, { $set: { watchlistInitializedAt: null } });
+    const readBatch = createWatchlistInitializationReader();
+    expect(await readBatch(undefined, 2)).toEqual([String(ids[0]), String(ids[2])]);
+    await User.create({ _id: ids[4], googleSubject: 'late', email: 'late@example.com', name: 'Late user' });
+    expect(await readBatch(String(ids[2]), 2)).toEqual([String(ids[3])]);
+    expect(await readBatch(String(ids[3]), 2)).toEqual([]);
+    await service.initializeUser(String(ids[1]));
+    expect(await service.symbols(String(ids[1]))).toEqual([]);
+    // A new attempt includes unfinished work and users created after the snapshot.
+    expect(await createWatchlistInitializationReader()(undefined, 10)).toEqual([ids[0], ids[2], ids[3], ids[4]].map(String));
   });
 
   it('rolls back starter entries and initialization marker when inserts fail', async () => {

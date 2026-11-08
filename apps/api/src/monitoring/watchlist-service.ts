@@ -1,3 +1,4 @@
+/** @deprecated Legacy global watchlist compatibility code, exercised only by tests. Never wire into the application runtime. */
 import { Watchlist } from '../models/watchlist.js';
 import type { MarketDataProvider } from '../market-data/provider.js';
 import { AuditEvent } from '../models/audit-event.js';

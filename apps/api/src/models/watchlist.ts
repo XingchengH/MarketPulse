@@ -1,4 +1,9 @@
 import mongoose from 'mongoose';
+/**
+ * @deprecated Compatibility artifact for the legacy global watchlists collection.
+ * The collection is retained and unused by production; do not drop its data or
+ * migration history. Personal watchlists use UserWatchlistEntry instead.
+ */
 const { Schema, model, models } = mongoose;
 export interface WatchlistDocument { symbol: string; enabled: boolean; createdAt: Date; updatedAt: Date }
 const schema = new Schema<WatchlistDocument>({ symbol: { type: String, required: true, unique: true, uppercase: true, trim: true }, enabled: { type: Boolean, required: true, default: true } }, { timestamps: true });

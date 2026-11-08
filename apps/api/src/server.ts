@@ -26,7 +26,7 @@ import { PersonalWatchlistService } from './monitoring/personal-watchlist-servic
 import { SubscriptionCoordinator } from './monitoring/subscription-coordinator.js';
 import { AssetDirectory } from './market-data/asset-directory.js';
 import { BootstrapAttempt } from './bootstrap-attempt.js';
-import { bootstrapPersonalWatchlists } from './bootstrap-personal-watchlists.js';
+import { bootstrapPersonalWatchlists, createWatchlistInitializationReader } from './bootstrap-personal-watchlists.js';
 
 const config = loadConfig();
 const staticDir = config.nodeEnv === 'production' ? fileURLToPath(new URL('../../web/dist', import.meta.url)) : undefined;
@@ -97,11 +97,9 @@ async function initialize(): Promise<void> {
     } });
     await bootstrapPersonalWatchlists({
       ensureIndexes: async () => { await Promise.all([User, UserWatchlistEntry, AuthInvariant, AuditEvent, RefreshToken].map(model => model.createIndexes())); },
-      usersMissingInitialization: async (after, limit) => {
-        const users = await User.find({ watchlistInitializedAt: null, ...(after ? { _id: { $gt: after } } : {}) }).select('_id').sort({ _id: 1 }).limit(limit).lean();
-        return users.map(user => String(user._id));
-      },
+      usersMissingInitialization: createWatchlistInitializationReader(),
       initializeUser: userId => watchlistService.initializeUser(userId),
+      onMigrationComplete: summary => console.log({ component: 'watchlist-migration', ...summary }, 'Personal watchlist migration completed'),
       coordinator: subscriptions, provider: marketProvider, attempt,
     });
     subscriptionsStarted = true;
@@ -140,10 +138,11 @@ async function initialize(): Promise<void> {
     try { publisher.providerState(providerState()); }
     catch { console.error({ component: 'realtime' }, 'Initial provider state publication failed'); }
     console.log('Database connected; application services started');
-  } catch (error) {
+  } catch {
     servicesReady = false;
     await attempt.rollback();
-    console.error({ component: 'bootstrap', error }, 'Application initialization failed; retrying');
+    // Database/provider errors may embed connection URIs or user data.
+    console.error({ component: 'bootstrap' }, 'Application initialization failed; retrying');
     if (!stopped) setTimeout(() => { initializing = false; void initialize(); }, 2_000).unref();
     return;
   }
