@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { providerStateSchema } from './market.js';
+import { watchlistChangedEventSchema } from './watchlist.js';
 
 const symbolSnapshotSchema = z.object({ symbol: z.string().min(1) }).passthrough();
 export const overviewSnapshotEventSchema = z.object({
@@ -17,6 +18,7 @@ export interface RealtimeServerEvents {
   'provider:state': (value: z.infer<typeof providerStateEventSchema>) => void;
   'alerts:changed': (value: z.infer<typeof changedEventSchema>) => void;
   'rules:changed': (value: z.infer<typeof changedEventSchema>) => void;
+  'watchlist:changed': (value: z.infer<typeof watchlistChangedEventSchema>) => void;
 }
 
 export type OverviewSnapshotEvent = z.infer<typeof overviewSnapshotEventSchema>;

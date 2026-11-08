@@ -14,6 +14,15 @@ export interface MarketClock {
   staleAgeMs?: number;
 }
 
+export interface ProviderAsset {
+  symbol: string;
+  name: string;
+  exchange?: string;
+  assetClass: 'us_equity';
+  status: 'active' | 'inactive';
+  tradable: boolean;
+}
+
 export interface MarketDataProvider {
   readonly name: 'alpaca';
   state(): ProviderState;
@@ -24,4 +33,5 @@ export interface MarketDataProvider {
   onOperationalEvent(listener: (event: OperationalEvent) => void): () => void;
   getMarketClock(): Promise<MarketClock>;
   lookupAsset(symbol: string): Promise<{ symbol: string; tradable: boolean } | null>;
+  listAssets(): Promise<ProviderAsset[]>;
 }

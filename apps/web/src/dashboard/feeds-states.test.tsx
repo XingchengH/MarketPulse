@@ -7,6 +7,8 @@ let rows: SymbolSnapshot[] = [];
 vi.mock('../api', () => ({
   useOverviewQuery: () => ({ data: { provider: 'alpaca' } }),
   useSymbolsQuery: () => state === 'loading' ? ({ isLoading: true }) : state === 'error' ? ({ isError: true, refetch: vi.fn() }) : ({ data: { symbols: rows } }),
+  useWatchlistQuery: () => ({ data: { watchlist: { entries: rows.map(row => ({ symbol: row.symbol, companyName: `${row.symbol} Inc.` })), used: rows.length, limit: 25 } } }),
+  useRemoveWatchlistSymbolMutation: () => [vi.fn(), { isLoading: false }],
 }));
 import { FeedsPage } from './FeedsPage';
 

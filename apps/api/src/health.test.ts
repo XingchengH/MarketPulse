@@ -17,6 +17,18 @@ const unconfigured = {
 };
 
 describe('service health', () => {
+  it('holds readiness and API traffic until bootstrap completes even with MongoDB and provider connected', async () => {
+    let servicesReady = false;
+    const app = createApp({ ...unconfigured, providerState: () => 'connected', configurationReadiness: { googleOAuth: true, alpaca: true, tokens: true }, servicesReady: () => servicesReady });
+    expect((await request(app).get('/health/live')).status).toBe(200);
+    expect((await request(app).get('/health/ready')).status).toBe(503);
+    expect((await request(app).get('/api/setup/status')).body.configured).toBe(false);
+    expect((await request(app).get('/api/overview')).status).toBe(503);
+    servicesReady = true;
+    expect((await request(app).get('/health/ready')).status).toBe(200);
+    expect((await request(app).get('/api/setup/status')).body.configured).toBe(true);
+  });
+
   it('reports setup state without exposing secrets', async () => {
     const response = await request(createApp(unconfigured)).get('/api/setup/status');
 

@@ -12,6 +12,14 @@ afterEach(() => { cleanup(); vi.restoreAllMocks(); });
 const renderGate = () => render(<Provider store={makeStore()}><MemoryRouter><AuthGate><div>private</div></AuthGate></MemoryRouter></Provider>);
 
 describe('startup gate', () => {
+  it.each(['/auth/logout', '/auth/switch-account'])('does not renew or retry cleanup rejected with 401 at %s', async url => {
+    const fetcher = vi.spyOn(globalThis, 'fetch').mockImplementation(() => reply({ error: { code: 'UNAUTHENTICATED' } }, 401));
+    const result = await httpBaseQuery({ url, method: 'POST' }, {} as Parameters<typeof httpBaseQuery>[1], {});
+    expect(result.error?.status).toBe(401);
+    expect(fetcher).toHaveBeenCalledOnce();
+    expect(fetcher).toHaveBeenCalledWith(`/api${url}`, expect.objectContaining({ method: 'POST', credentials: 'include' }));
+  });
+
   it('coalesces refresh rotation and retries concurrent requests after an expired access cookie', async () => {
     let refreshes = 0;
     let protectedCalls = 0;

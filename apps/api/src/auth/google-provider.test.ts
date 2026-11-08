@@ -1,5 +1,16 @@
 import { describe, expect, it } from 'vitest';
-import { parseGoogleProfile } from './google-provider.js';
+import { createGoogleIdentityProvider, parseGoogleProfile } from './google-provider.js';
+
+describe('Google authorization', () => {
+  it('asks for account selection only when explicitly enabled and preserves state', () => {
+    const provider = createGoogleIdentityProvider('client', 'secret', 'http://localhost/callback');
+    for (const options of [undefined, { selectAccount: false }, { selectAccount: true }]) {
+      const url = new URL(provider.authorizationUrl('oauth-state', options));
+      expect(url.searchParams.get('state')).toBe('oauth-state');
+      expect(url.searchParams.get('prompt')).toBe(options?.selectAccount ? 'select_account' : null);
+    }
+  });
+});
 
 describe('Google profile validation', () => {
   it('accepts only explicitly verified email identities', () => {

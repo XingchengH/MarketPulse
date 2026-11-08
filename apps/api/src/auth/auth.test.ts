@@ -51,7 +51,7 @@ function makeRepository(): AuthRepository & { refreshes: Map<string, RefreshReco
 
 function makeApp(repository: AuthRepository, tokenTtl = '15m') {
   const provider = {
-    authorizationUrl: (state: string) => `https://accounts.example/authorize?state=${state}`,
+    authorizationUrl: (state: string, options?: { selectAccount?: boolean }) => `https://accounts.example/authorize?state=${state}${options?.selectAccount ? '&prompt=select_account' : ''}`,
     exchange: async () => ({ subject: 'google-123', email: 'viewer@example.com', name: 'Viewer', picture: 'https://example.com/p.png' }),
   };
   const app = express();
@@ -69,6 +69,29 @@ describe('authentication', () => {
   let repository: ReturnType<typeof makeRepository>;
 
   beforeEach(() => { repository = makeRepository(); });
+
+  it.each(['', '?select_account=false', '?select_account=1', '?select_account=TRUE', '?select_account=true&select_account=false', '?select_account[enabled]=true'])('does not select an account for %s', async query => {
+    const response = await request(makeApp(repository)).get(`/api/auth/google${query}`);
+    expect(new URL(response.headers.location).searchParams.has('prompt')).toBe(false);
+  });
+
+  it('selects a Google account when requested and retains the OAuth state cookie', async () => {
+    const agent = request.agent(makeApp(repository));
+    const start = await agent.get('/api/auth/google?select_account=true');
+    const state = cookieValue(start.headers['set-cookie'], 'oauth_state');
+    const url = new URL(start.headers.location);
+    expect(url.searchParams.get('prompt')).toBe('select_account');
+    expect(url.searchParams.get('state')).toBe(state);
+    expect((await agent.get(`/api/auth/google/callback?code=ok&state=${state}`)).status).toBe(302);
+  });
+
+  it.each(['logout', 'switch-account'])('%s clears cookies without a refresh cookie', async route => {
+    const response = await request(makeApp(repository)).post(`/api/auth/${route}`);
+    expect(response.status).toBe(204);
+    expect(response.headers.location).toBeUndefined();
+    expect(cookieValue(response.headers['set-cookie'], 'access_token')).toBe('');
+    expect(cookieValue(response.headers['set-cookie'], 'refresh_token')).toBe('');
+  });
 
   it('creates a new Google user as viewer and never returns token values', async () => {
     const agent = request.agent(makeApp(repository));
@@ -149,15 +172,21 @@ describe('authentication', () => {
     expect((await request(makeApp(repository)).post('/api/auth/refresh').set('Cookie', `refresh_token=${successor}`)).status).toBe(401);
   });
 
-  it('revokes the refresh family and clears cookies on logout', async () => {
+  it.each(['logout', 'switch-account'])('revokes the whole refresh family and clears cookies on %s', async route => {
     const agent = request.agent(makeApp(repository));
     const start = await agent.get('/api/auth/google');
     const state = cookieValue(start.headers['set-cookie'], 'oauth_state');
     const login = await agent.get(`/api/auth/google/callback?code=ok&state=${state}`);
     const refresh = cookieValue(login.headers['set-cookie'], 'refresh_token');
-    const logout = await request(makeApp(repository)).post('/api/auth/logout').set('Cookie', `refresh_token=${refresh}`);
+    const rotated = await request(makeApp(repository)).post('/api/auth/refresh').set('Cookie', `refresh_token=${refresh}`);
+    const successor = cookieValue(rotated.headers['set-cookie'], 'refresh_token');
+    const logout = await request(makeApp(repository)).post(`/api/auth/${route}`).set('Cookie', `refresh_token=${successor}`);
     expect(logout.status).toBe(204);
     expect(logout.headers['set-cookie'].join(';')).toContain('access_token=;');
+    expect(cookieValue(logout.headers['set-cookie'], 'refresh_token')).toBe('');
+    expect(logout.headers.location).toBeUndefined();
+    expect(logout.text).toBe('');
+    expect([...repository.refreshes.values()].every(record => record.revokedAt)).toBe(true);
     expect((await request(makeApp(repository)).post('/api/auth/refresh').set('Cookie', `refresh_token=${refresh}`)).status).toBe(401);
   });
 });

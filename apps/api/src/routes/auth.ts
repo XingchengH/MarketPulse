@@ -1,5 +1,5 @@
 import { randomBytes, timingSafeEqual } from 'node:crypto';
-import { Router } from 'express';
+import { Router, type Request, type Response } from 'express';
 import type { Role } from '@marketpulse/contracts';
 import type { GoogleIdentityProvider, GoogleProfile } from '../auth/google-provider.js';
 import { clearAuthCookies, clearStateCookie, cookieNames, readCookie, setAuthCookies, setStateCookie } from '../auth/cookies.js';
@@ -32,10 +32,10 @@ export function createAuthRouter({ provider, repository, tokens, nodeEnv, webOri
   const router = Router();
   const production = nodeEnv === 'production';
 
-  router.get('/google', (_request, response) => {
+  router.get('/google', (request, response) => {
     const state = randomBytes(32).toString('base64url');
     setStateCookie(response, state, production);
-    response.redirect(provider.authorizationUrl(state));
+    response.redirect(provider.authorizationUrl(state, { selectAccount: request.query.select_account === 'true' }));
   });
 
   router.get('/google/callback', async (request, response) => {
@@ -90,7 +90,7 @@ export function createAuthRouter({ provider, repository, tokens, nodeEnv, webOri
     response.sendStatus(204);
   });
 
-  router.post('/logout', async (request, response) => {
+  async function endSession(request: Request, response: Response): Promise<void> {
     const value = readCookie(request, cookieNames.refresh);
     if (value) {
       const current = await repository.findRefresh(tokens.hashRefreshToken(value));
@@ -98,6 +98,8 @@ export function createAuthRouter({ provider, repository, tokens, nodeEnv, webOri
     }
     clearAuthCookies(response, production);
     response.sendStatus(204);
-  });
+  }
+  router.post('/logout', endSession);
+  router.post('/switch-account', endSession);
   return router;
 }

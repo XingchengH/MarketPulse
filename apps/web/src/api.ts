@@ -1,13 +1,13 @@
 import { createApi } from '@reduxjs/toolkit/query/react';
 import type { BaseQueryFn, FetchArgs } from '@reduxjs/toolkit/query';
-import type { Role, RuleInput } from '@marketpulse/contracts';
+import type { AssetSearchResult, PersonalWatchlist, Role, RuleInput, WatchlistEntry } from '@marketpulse/contracts';
 
 export type ServiceState = 'ready' | 'missing' | 'unavailable' | 'unconfigured' | 'connecting' | 'connected' | 'reconnecting' | 'market_closed' | 'outside_session' | 'auth_rejected' | 'rate_limited';
 export interface SetupStatus { configured: boolean; services: Record<'mongodb' | 'googleOAuth' | 'alpaca' | 'tokens', ServiceState> }
 export interface User { id: string; email: string; name: string; picture?: string; role: Role; lastLoginAt?: string }
 export interface Overview { provider: string; providerState: string; symbols: string[] }
 export interface SymbolSnapshot { symbol: string; feed: string | null; latestTrade?: { price: number }; latestQuote?: { bid: number; ask: number }; spread?: number; receivedMessagesPerSecond: number; lastEventAt: string | null; observedLatency: { latest: number; p95: number }; staleDurationMs: number; providerErrors: number; reconnects: number; marketClock?: { isOpen: boolean; status?: 'current' | 'degraded'; staleAgeMs?: number } | null; marketClockStatus?: 'current' | 'degraded' | 'unavailable' }
-export interface WatchlistItem { _id: string; symbol: string; enabled: boolean; createdAt: string; updatedAt: string }
+export type WatchlistItem = WatchlistEntry;
 export interface Alert { _id: string; symbol: string; metric: string; severity: string; status: string; value: number; threshold: number; lastObservedAt: string; acknowledgedAt?: string; acknowledgedBy?: string }
 export interface Rule extends RuleInput { _id: string; version: number; updatedAt: string }
 export interface RuleVersion { _id?: string; ruleId: string; version: number; snapshot: RuleInput; actorId: string; createdAt: string }
@@ -15,7 +15,9 @@ export interface AuditEvent { _id: string; actorId: string; action: string; reso
 export interface ApiError { status: number | string; data?: { error?: { code?: string; message?: string } } }
 
 let refreshRequest: Promise<boolean> | undefined;
+let endingSession = false;
 export function refreshSession(): Promise<boolean> {
+  if (endingSession) return Promise.resolve(false);
   if (!refreshRequest) {
     refreshRequest = fetch('/api/auth/refresh', { method: 'POST', credentials: 'include' })
       .then(response => response.ok)
@@ -37,10 +39,22 @@ async function request(value: string | FetchArgs): Promise<HttpResult> {
   } catch { return { error: { status: 'FETCH_ERROR' } }; }
 }
 
-export const httpBaseQuery: BaseQueryFn<string | FetchArgs, unknown, ApiError> = async value => {
+export const httpBaseQuery: BaseQueryFn<string | FetchArgs, unknown, ApiError> = async (value, context) => {
+  const url = typeof value === 'string' ? value : value.url;
+  if (url === '/auth/logout' || url === '/auth/switch-account') {
+    // Let an already-issued refresh finish setting cookies before clearing them.
+    // New renewals and automatic 401 retries must not race session cleanup.
+    endingSession = true;
+    try {
+      await refreshRequest;
+      return await request(value);
+    } finally { endingSession = false; }
+  }
+  const ended = () => (context.getState?.() as { auth?: { sessionEnded: boolean } })?.auth?.sessionEnded;
+  if (ended()) return { error: { status: 401 } };
   const result = await request(value);
   if (result.error?.status !== 401) return result;
-  if (!(await refreshSession())) return result;
+  if (ended() || !(await refreshSession()) || ended()) return result;
   return request(value);
 };
 
@@ -51,12 +65,15 @@ export const api = createApi({
   endpoints: build => ({
     setupStatus: build.query<SetupStatus, void>({ query: () => '/setup/status' }),
     session: build.query<{ user: User }, void>({ query: () => '/auth/me' }),
+    logout: build.mutation<void, void>({ query: () => ({ url: '/auth/logout', method: 'POST' }) }),
+    switchAccount: build.mutation<void, void>({ query: () => ({ url: '/auth/switch-account', method: 'POST' }) }),
     overview: build.query<Overview, void>({ query: () => '/overview', providesTags: ['Overview'] }),
     symbols: build.query<{ symbols: SymbolSnapshot[] }, void>({ query: () => '/symbols', providesTags: ['Symbols'] }),
     symbol: build.query<SymbolSnapshot, string>({ query: symbol => `/symbols/${symbol}`, providesTags: ['Symbols'] }),
-    watchlist: build.query<{ watchlist: WatchlistItem[] }, void>({ query: () => '/watchlist', providesTags: ['Watchlist'] }),
-    addWatchlistSymbol: build.mutation<{ watchlist: WatchlistItem[] }, string>({ query: symbol => ({ url: '/watchlist', method: 'POST', body: { symbol } }), invalidatesTags: ['Watchlist', 'Overview', 'Symbols'] }),
-    removeWatchlistSymbol: build.mutation<{ watchlist: WatchlistItem[] }, string>({ query: symbol => ({ url: `/watchlist/${encodeURIComponent(symbol)}`, method: 'DELETE' }), invalidatesTags: ['Watchlist', 'Overview', 'Symbols'] }),
+    assetSearch: build.query<{ results: AssetSearchResult[] }, string>({ query: q => ({ url: '/assets/search', params: { q } }), providesTags: ['Watchlist'] }),
+    watchlist: build.query<{ watchlist: PersonalWatchlist }, void>({ query: () => '/watchlist', providesTags: ['Watchlist'] }),
+    addWatchlistSymbol: build.mutation<{ watchlist: PersonalWatchlist }, string>({ query: symbol => ({ url: '/watchlist', method: 'POST', body: { symbol } }), invalidatesTags: ['Watchlist', 'Overview', 'Symbols', 'Alerts', 'Audit'] }),
+    removeWatchlistSymbol: build.mutation<{ watchlist: PersonalWatchlist }, string>({ query: symbol => ({ url: `/watchlist/${encodeURIComponent(symbol)}`, method: 'DELETE' }), invalidatesTags: ['Watchlist', 'Overview', 'Symbols', 'Alerts', 'Audit'] }),
     users: build.query<{ users: User[] }, void>({ query: () => '/admin/users', providesTags: ['Users'] }),
     updateUserRole: build.mutation<{ user: User }, { id: string; role: Role }>({ query: ({ id, role }) => ({ url: `/admin/users/${id}/role`, method: 'PATCH', body: { role } }), invalidatesTags: ['Users'] }),
     metrics: build.query<{ metrics: unknown[] }, { symbol: string; from?: string; to?: string }>({ query: p => ({ url: '/metrics', params: { ...p, interval: '1m' } }) }),
@@ -72,4 +89,4 @@ export const api = createApi({
   }),
 });
 
-export const { useSetupStatusQuery, useSessionQuery, useOverviewQuery, useSymbolsQuery, useSymbolQuery, useWatchlistQuery, useAddWatchlistSymbolMutation, useRemoveWatchlistSymbolMutation, useUsersQuery, useUpdateUserRoleMutation, useMetricsQuery, useAlertsQuery, useAcknowledgeAlertMutation, useRulesQuery, useRuleVersionsQuery, useCreateRuleMutation, useUpdateRuleMutation, useToggleRuleMutation, useRollbackRuleMutation, useAuditQuery } = api;
+export const { useSetupStatusQuery, useSessionQuery, useLogoutMutation, useSwitchAccountMutation, useOverviewQuery, useSymbolsQuery, useSymbolQuery, useAssetSearchQuery, useWatchlistQuery, useAddWatchlistSymbolMutation, useRemoveWatchlistSymbolMutation, useUsersQuery, useUpdateUserRoleMutation, useMetricsQuery, useAlertsQuery, useAcknowledgeAlertMutation, useRulesQuery, useRuleVersionsQuery, useCreateRuleMutation, useUpdateRuleMutation, useToggleRuleMutation, useRollbackRuleMutation, useAuditQuery } = api;

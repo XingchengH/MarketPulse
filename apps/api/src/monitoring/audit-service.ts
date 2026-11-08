@@ -5,7 +5,7 @@ export function redactAuditValue(value: unknown): unknown {
   if (value && typeof value === 'object') return Object.fromEntries(Object.entries(value).filter(([key]) => !forbidden.test(key)).map(([key, child]) => [key, redactAuditValue(child)]));
   return value;
 }
-export interface AuditInput { actorId: string; action: string; resourceType: string; resourceId: string; requestId: string; before?: unknown; after?: unknown; createdAt?: Date }
+export interface AuditInput { actorId: string; ownerUserId?: string; action: string; resourceType: string; resourceId: string; requestId: string; before?: unknown; after?: unknown; createdAt?: Date }
 export interface AuditStore { append(event: AuditInput): Promise<void> }
 export class AuditService {
   constructor(private readonly store: AuditStore = { append: async event => { await AuditEvent.create(event); } }) {}

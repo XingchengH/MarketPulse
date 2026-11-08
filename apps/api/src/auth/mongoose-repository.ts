@@ -13,12 +13,16 @@ const publicUser = (value: { _id: unknown; email: string; name: string; picture?
 const adminUser = (value: { _id: unknown; email: string; name: string; role: Role; lastLoginAt?: Date }): AdminUser => ({ id: String(value._id), email: value.email, name: value.name, role: value.role, lastLoginAt: value.lastLoginAt });
 
 export class MongooseAuthRepository implements AuthRepository, AdminUserRepository {
+  constructor(private readonly initializeWatchlist: (userId: string) => Promise<void> = async () => undefined) {}
+
   async upsertGoogleUser(profile: GoogleProfile): Promise<PublicUser> {
     const user = await User.findOneAndUpdate(
       { googleSubject: profile.subject },
       { $set: { email: profile.email, name: profile.name, picture: profile.picture, lastLoginAt: new Date() }, $setOnInsert: { googleSubject: profile.subject, role: 'viewer' } },
       { upsert: true, returnDocument: 'after', runValidators: true },
     ).lean();
+    if (!user) throw new Error('Google user upsert returned no user');
+    await this.initializeWatchlist(String(user._id));
     return publicUser(user as never);
   }
   async findUserById(id: string): Promise<PublicUser | null> {

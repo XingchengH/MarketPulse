@@ -9,17 +9,20 @@ import { RealtimePublisher } from './publisher.js';
 const sockets: ClientSocket[] = [];
 afterEach(() => { for (const socket of sockets.splice(0)) socket.close(); vi.useRealTimers(); });
 
-async function fixture(role: Role | null, tokenRole: Role = role ?? 'viewer', webOrigin?: string) {
+async function fixture(role: Role | null, tokenRole: Role = role ?? 'viewer', webOrigin?: string, lists: Record<string, string[]> = { u1: ['AAPL'] }) {
   let currentRole = role;
   let tokenValid = true;
   const http = createServer();
   const tokens = { verifyAccessToken: vi.fn(async (value: string) => {
-    if (value !== 'good' || !tokenValid) throw new Error('bad token');
-    return { sub: 'u1', role: tokenRole };
+    const sub = value === 'good' ? 'u1' : value;
+    if (!lists[sub] || !tokenValid) throw new Error('bad token');
+    return { sub, role: tokenRole };
   }) };
+  const symbolsForUser = vi.fn(async (id: string) => lists[id] ?? []);
   const realtime = createRealtimeServer(http, {
     tokens: tokens as never,
-    findCurrentUser: vi.fn(async () => currentRole ? ({ id: 'u1', role: currentRole }) : null),
+    findCurrentUser: vi.fn(async id => currentRole ? ({ id, role: currentRole }) : null),
+    symbolsForUser,
     webOrigin,
     revalidateIntervalMs: 10,
   });
@@ -32,13 +35,126 @@ async function fixture(role: Role | null, tokenRole: Role = role ?? 'viewer', we
     return socket;
   };
   const close = async () => { await realtime.close(); if (http.listening) await new Promise<void>((resolve, reject) => http.close(error => error ? reject(error) : resolve())); };
-  return { realtime, open, close, setRole: (next: Role | null) => { currentRole = next; }, revoke: () => { tokenValid = false; } };
+  return { realtime, open, close, lists, symbolsForUser, setRole: (next: Role | null) => { currentRole = next; }, revoke: () => { tokenValid = false; } };
 }
 
 const connected = (socket: ClientSocket) => new Promise<void>((resolve, reject) => { socket.once('connect', resolve); socket.once('connect_error', reject); });
 const rejected = (socket: ClientSocket) => new Promise<Error>(resolve => socket.once('connect_error', resolve));
 
 describe('realtime server', () => {
+  it('isolates overlapping personal symbols, refreshes all existing sockets, and reloads rooms on reconnect', async () => {
+    const app = await fixture('viewer', 'viewer', undefined, { userA: ['AAPL', 'MSFT'], userB: ['AAPL', 'TSLA'] });
+    const publisher = new RealtimePublisher(app.realtime, { intervalMs: 1 });
+    try {
+      const a = app.open('access_token=userA'), a2 = app.open('access_token=userA'), b = app.open('access_token=userB');
+      await Promise.all([connected(a), connected(a2), connected(b)]);
+      const received = [a, a2, b].map(socket => {
+        const symbols: string[] = [];
+        socket.on('symbols:snapshot', rows => symbols.push(...rows.map((row: { symbol: string }) => row.symbol)));
+        return symbols;
+      });
+      const overviews = vi.fn();
+      a.on('overview:snapshot', overviews);
+      publisher.requestSnapshots({ provider: 'alpaca', providerState: 'connected', symbols: ['AAPL', 'MSFT', 'TSLA'], snapshot: async symbol => ({ symbol }) });
+      await vi.waitFor(() => expect(received).toEqual([['AAPL', 'MSFT'], ['AAPL', 'MSFT'], ['AAPL', 'TSLA']]));
+      expect(overviews).not.toHaveBeenCalled();
+
+      app.lists.userA = ['TSLA'];
+      await app.realtime.refreshUserRooms('userA');
+      for (const socket of app.realtime.sockets.sockets.values()) {
+        if (socket.data.user.id !== 'userA') continue;
+        expect(socket.rooms).toEqual(new Set([socket.id, 'workspace:default', 'user:userA', 'symbol:TSLA']));
+      }
+      received.forEach(values => { values.length = 0; });
+      publisher.symbols([{ symbol: 'AAPL' }, { symbol: 'MSFT' }, { symbol: 'TSLA' }] as never);
+      await vi.waitFor(() => expect(received).toEqual([['TSLA'], ['TSLA'], ['AAPL', 'TSLA']]));
+
+      app.lists.userA = ['MSFT'];
+      a.close();
+      const reconnected = app.open('access_token=userA');
+      await connected(reconnected);
+      const reloaded = [...app.realtime.sockets.sockets.values()].find(socket => socket.id === reconnected.id)!;
+      expect(reloaded.rooms.has('symbol:MSFT')).toBe(true);
+      expect(reloaded.rooms.has('symbol:TSLA')).toBe(false);
+
+      const changes: unknown[][] = [[], []], states: unknown[][] = [[], []];
+      [a2, b].forEach((socket, index) => {
+        socket.on('watchlist:changed', value => changes[index]!.push(value));
+        socket.on('provider:state', value => states[index]!.push(value));
+      });
+      publisher.providerState('connected');
+      publisher.watchlistChanged('userA', ['MSFT']);
+      await vi.waitFor(() => expect(states.every(values => values.length === 1)).toBe(true));
+      expect(changes).toEqual([[{ symbols: ['MSFT'], used: 1, limit: 25, at: expect.any(String) }], []]);
+    } finally { publisher.close(); await app.close(); }
+  });
+
+  it('normalizes and bounds rooms and preserves current rooms if a refresh lookup fails', async () => {
+    const app = await fixture('admin', 'admin', undefined, { u1: [' aapl ', 'AAPL', ...Array.from({ length: 30 }, (_, index) => `S${index}`)] });
+    try {
+      const socket = app.open('access_token=good');
+      await connected(socket);
+      const serverSocket = [...app.realtime.sockets.sockets.values()][0]!;
+      expect([...serverSocket.rooms].filter(room => room.startsWith('symbol:'))).toHaveLength(25);
+      expect(serverSocket.rooms.has('symbol:AAPL')).toBe(true);
+      const before = new Set(serverSocket.rooms);
+      app.symbolsForUser.mockRejectedValueOnce(new Error('database unavailable'));
+      await expect(app.realtime.refreshUserRooms('u1')).rejects.toThrow('database unavailable');
+      expect(serverSocket.rooms).toEqual(before);
+      app.lists.u1 = [];
+      await app.realtime.refreshUserRooms('u1');
+      expect(serverSocket.rooms).toEqual(new Set([serverSocket.id, 'workspace:default', 'user:u1', 'admin:default']));
+    } finally { await app.close(); }
+  });
+
+  it('refreshes authenticated handshakes without letting their older read restore removed rooms', async () => {
+    const app = await fixture('viewer');
+    let release!: (symbols: string[]) => void;
+    let reading!: () => void;
+    const started = new Promise<void>(resolve => { reading = resolve; });
+    app.symbolsForUser.mockImplementationOnce(() => { reading(); return new Promise<string[]>(resolve => { release = resolve; }); });
+    try {
+      const socket = app.open('access_token=good');
+      const connection = connected(socket);
+      await started;
+      app.lists.u1 = ['TSLA'];
+      const refresh = app.realtime.refreshUserRooms('u1');
+      release(['AAPL']);
+      await Promise.all([connection, refresh]);
+      const serverSocket = [...app.realtime.sockets.sockets.values()][0]!;
+      expect(serverSocket.rooms.has('symbol:TSLA')).toBe(true);
+      expect(serverSocket.rooms.has('symbol:AAPL')).toBe(false);
+    } finally { await app.close(); }
+  });
+
+  it('closes pending handshakes when a concurrent room refresh cannot load membership', async () => {
+    const app = await fixture('viewer');
+    type ServerSocket = Parameters<Parameters<typeof app.realtime.use>[0]>[0];
+    let release!: () => void;
+    let pending!: (socket: ServerSocket) => void;
+    const handshake = new Promise<ServerSocket>(resolve => { pending = resolve; });
+    app.realtime.use((socket, next) => { release = next; pending(socket); });
+    try {
+      const socket = app.open('access_token=good');
+      const serverSocket = await handshake;
+      const closed = vi.spyOn(serverSocket.conn, 'close');
+      app.symbolsForUser.mockRejectedValueOnce(new Error('database unavailable'));
+      const refresh = app.realtime.refreshUserRooms('u1');
+      await expect(refresh).rejects.toThrow('database unavailable');
+      expect(closed).toHaveBeenCalled();
+      release();
+      await vi.waitFor(() => expect(socket.connected).toBe(false));
+    } finally { await app.close(); }
+  });
+
+  it('fails closed with a generic error when personal room lookup fails during authentication', async () => {
+    const app = await fixture('viewer');
+    try {
+      app.symbolsForUser.mockRejectedValueOnce(new Error('private database details'));
+      expect((await rejected(app.open('access_token=good'))).message).toBe('Authentication required');
+      expect(app.realtime.sockets.sockets.size).toBe(0);
+    } finally { await app.close(); }
+  });
   it('rejects anonymous and deleted users', async () => {
     const anonymous = await fixture('viewer');
     expect((await rejected(anonymous.open())).message).toBe('Authentication required');
@@ -107,44 +223,40 @@ describe('realtime server', () => {
     await app.close();
   });
 
-  it('coalesces provider bursts to one bounded overview and symbols snapshot per interval', async () => {
+  it('coalesces bursts independently per symbol, caps each batch, and cancels pending timers', async () => {
     vi.useFakeTimers();
     let now = 0;
-    const emitted: Array<{ event: string; value: unknown }> = [];
-    const target = { emit: (event: string, value: unknown) => { emitted.push({ event, value }); } };
-    const server = { to: vi.fn(() => target) };
+    const emitted: Array<{ room: string; event: string; value: unknown }> = [];
+    const server = { to: vi.fn((room: string) => ({ emit: (event: string, value: unknown) => { emitted.push({ room, event, value }); } })) };
     const publisher = new RealtimePublisher(server as never, { intervalMs: 1_000, maxSymbols: 2, now: () => now });
     const publishBurst = (offset: number) => {
       for (let index = 0; index < 50; index += 1) {
-        publisher.overview({ provider: 'alpaca', providerState: 'connected', symbols: [`A${offset + index}`, 'MSFT', 'NVDA'] });
-        publisher.symbols([{ symbol: `A${offset + index}` }, { symbol: 'MSFT' }, { symbol: 'NVDA' }] as never);
+        publisher.symbols([{ symbol: 'AAPL', price: offset + index }, { symbol: 'MSFT', price: offset + index }, { symbol: 'NVDA' }] as never);
       }
     };
 
     publishBurst(0);
-    expect(emitted.filter(value => value.event === 'overview:snapshot')).toHaveLength(1);
-    expect(emitted.filter(value => value.event === 'symbols:snapshot')).toHaveLength(1);
-    expect((emitted.find(value => value.event === 'overview:snapshot')?.value as { symbols: string[] }).symbols).toHaveLength(2);
-    expect((emitted.find(value => value.event === 'symbols:snapshot')?.value as unknown[])).toHaveLength(2);
+    await vi.advanceTimersByTimeAsync(2);
+    expect(emitted).toEqual(['AAPL', 'MSFT'].map(symbol => ({ room: `symbol:${symbol}`, event: 'symbols:snapshot', value: [{ symbol, price: 0 }] })));
 
-    await vi.advanceTimersByTimeAsync(999);
+    await vi.advanceTimersByTimeAsync(997);
     now = 999;
-    expect(emitted.filter(value => value.event === 'overview:snapshot')).toHaveLength(1);
-    expect(emitted.filter(value => value.event === 'symbols:snapshot')).toHaveLength(1);
+    expect(emitted).toHaveLength(2);
 
     now = 1_000;
-    await vi.advanceTimersByTimeAsync(1);
-    expect(emitted.filter(value => value.event === 'overview:snapshot')).toHaveLength(2);
-    expect(emitted.filter(value => value.event === 'symbols:snapshot')).toHaveLength(2);
+    await vi.advanceTimersByTimeAsync(3);
+    expect(emitted.slice(2)).toEqual(['AAPL', 'MSFT'].map(symbol => ({ room: `symbol:${symbol}`, event: 'symbols:snapshot', value: [{ symbol, price: 49 }] })));
 
     publishBurst(100);
-    expect(emitted.filter(value => value.event === 'overview:snapshot')).toHaveLength(2);
-    expect(emitted.filter(value => value.event === 'symbols:snapshot')).toHaveLength(2);
+    expect(emitted).toHaveLength(4);
     now = 2_000;
-    await vi.advanceTimersByTimeAsync(1_000);
-    expect(emitted.filter(value => value.event === 'overview:snapshot')).toHaveLength(3);
-    expect(emitted.filter(value => value.event === 'symbols:snapshot')).toHaveLength(3);
+    await vi.advanceTimersByTimeAsync(1_002);
+    expect(emitted.slice(4)).toEqual(['AAPL', 'MSFT'].map(symbol => ({ room: `symbol:${symbol}`, event: 'symbols:snapshot', value: [{ symbol, price: 149 }] })));
+    publishBurst(200);
     publisher.close();
+    await vi.runAllTimersAsync();
+    expect(emitted).toHaveLength(6);
+    expect(vi.getTimerCount()).toBe(0);
   });
 
   it('gates snapshot construction, caps work, and never overlaps builds', async () => {
@@ -185,18 +297,141 @@ describe('realtime server', () => {
     publisher.close();
   });
 
-  it('uses volatile delivery only for replaceable state', () => {
+  it.each([501, 1_001])('rotates bounded snapshot builds fairly through a %i-symbol union', async count => {
+    vi.useFakeTimers();
+    const symbols = Array.from({ length: count }, (_, index) => `S${String(index).padStart(4, '0')}`);
+    const rooms: string[] = [];
+    const snapshot = vi.fn(async (symbol: string) => ({ symbol }));
+    const server = { volatile: { to: (room: string) => ({ emit: () => rooms.push(room) }) } };
+    const publisher = new RealtimePublisher(server as never, { intervalMs: 0 });
+    const batches: string[][] = [];
+    const cycle = Math.ceil(count / 500);
+    for (let build = 0; build < cycle + 1; build += 1) {
+      snapshot.mockClear();
+      rooms.length = 0;
+      publisher.requestSnapshots({ provider: 'alpaca', providerState: 'connected', symbols, snapshot });
+      await vi.runAllTimersAsync();
+      const expected = Array.from({ length: 500 }, (_, index) => symbols[(build * 500 + index) % count]!);
+      const batch = snapshot.mock.calls.map(([symbol]) => symbol);
+      expect(batch).toEqual(expected);
+      expect(new Set(batch).size).toBe(500);
+      expect(rooms).toEqual(expected.map(symbol => `symbol:${symbol}`));
+      batches.push(batch);
+    }
+    // Every full rotation window covers the tail as well as the first symbols.
+    for (let start = 0; start <= batches.length - cycle; start += 1) {
+      expect(new Set(batches.slice(start, start + cycle).flat()).size).toBe(count);
+    }
+    publisher.close();
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it.each([0, 1, 499, 500])('keeps the full %i-symbol union in every build when it fits the batch', async count => {
+    vi.useFakeTimers();
+    const symbols = Array.from({ length: count }, (_, index) => `S${index}`);
+    const snapshot = vi.fn(async (symbol: string) => ({ symbol }));
+    const publisher = new RealtimePublisher({ to: () => ({ emit: vi.fn() }) } as never, { intervalMs: 0 });
+    for (let build = 0; build < 2; build += 1) {
+      snapshot.mockClear();
+      publisher.requestSnapshots({ provider: 'alpaca', providerState: 'connected', symbols, snapshot });
+      await vi.runAllTimersAsync();
+      expect(snapshot.mock.calls.map(([symbol]) => symbol)).toEqual(symbols);
+    }
+    publisher.close();
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('wraps the snapshot cursor safely across union changes, duplicates, and empty lists', async () => {
+    vi.useFakeTimers();
+    const snapshot = vi.fn(async (symbol: string) => ({ symbol }));
+    const publisher = new RealtimePublisher({ to: () => ({ emit: vi.fn() }) } as never, { intervalMs: 0, maxSymbols: 2 });
+    const build = async (symbols: string[], expected: string[]) => {
+      snapshot.mockClear();
+      publisher.requestSnapshots({ provider: 'alpaca', providerState: 'connected', symbols, snapshot });
+      await vi.runAllTimersAsync();
+      expect(snapshot.mock.calls.map(([symbol]) => symbol)).toEqual(expected);
+    };
+    await build(['A', 'B', 'C', 'D', 'E'], ['A', 'B']);
+    await build(['A', 'C', 'D', 'E'], ['C', 'D']);
+    await build(['A', 'C', 'D', 'E'], ['E', 'A']);
+    await build([], []);
+    await build(['X', 'Y', 'X'], ['X', 'Y']);
+    await build(['X', 'Y', 'Z'], ['Z', 'X']);
+    await build(['X', 'Y', 'Z'], ['Y', 'Z']);
+    await build([' aapl ', 'AAPL', 'MSFT', 'TSLA'], ['AAPL', 'MSFT']);
+    publisher.close();
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('continues after the last completed symbol when the sorted union changes', async () => {
+    vi.useFakeTimers();
+    const snapshot = vi.fn(async (symbol: string) => ({ symbol }));
+    const publisher = new RealtimePublisher({ to: () => ({ emit: vi.fn() }) } as never, { intervalMs: 0, maxSymbols: 2 });
+    const build = async (symbols: string[]) => {
+      snapshot.mockClear();
+      publisher.requestSnapshots({ provider: 'alpaca', providerState: 'connected', symbols, snapshot });
+      await vi.runAllTimersAsync();
+      return snapshot.mock.calls.map(([symbol]) => symbol);
+    };
+
+    expect(await build(['A', 'B', 'C', 'D', 'E'])).toEqual(['A', 'B']);
+    expect(await build(['A', 'C', 'D', 'E', 'F'])).toEqual(['C', 'D']);
+    expect(await build(['A', 'B', 'C', 'E', 'F', 'G'])).toEqual(['E', 'F']);
+    expect(await build(['A', 'B', 'C', 'E', 'F', 'G'])).toEqual(['G', 'A']);
+    expect(await build(['D', 'E', 'C', 'A', 'B', 'F', 'G'])).toEqual(['B', 'F']);
+
+    publisher.close();
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('advances the batch cursor only after a build completes successfully', async () => {
+    vi.useFakeTimers();
+    const snapshot = vi.fn(async (symbol: string) => ({ symbol }));
+    snapshot.mockRejectedValueOnce(new Error('temporary snapshot failure'));
+    const publisher = new RealtimePublisher({ to: () => ({ emit: vi.fn() }) } as never, { intervalMs: 0, maxSymbols: 2 });
+    const request = () => publisher.requestSnapshots({ provider: 'alpaca', providerState: 'connected', symbols: ['A', 'B', 'C'], snapshot });
+
+    request();
+    await vi.runAllTimersAsync();
+    snapshot.mockClear();
+    request();
+    await vi.runAllTimersAsync();
+    expect(snapshot.mock.calls.map(([symbol]) => symbol)).toEqual(['A', 'B']);
+
+    publisher.close();
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('discards an overdue throttled value when a newer symbol update arrives first', async () => {
+    vi.useFakeTimers();
+    let now = 0;
+    const emitted: unknown[] = [];
+    const server = { to: () => ({ emit: (_event: string, value: unknown) => emitted.push(value) }) };
+    const publisher = new RealtimePublisher(server as never, { intervalMs: 1_000, now: () => now });
+    publisher.symbols([{ symbol: 'AAPL', price: 1 }] as never);
+    await vi.advanceTimersByTimeAsync(0);
+    publisher.symbols([{ symbol: 'AAPL', price: 2 }] as never);
+    now = 1_001;
+    publisher.symbols([{ symbol: 'AAPL', price: 3 }] as never);
+    await vi.advanceTimersByTimeAsync(1_001);
+    expect(emitted.at(-1)).toEqual([{ symbol: 'AAPL', price: 3 }]);
+    publisher.close();
+  });
+
+  it('uses volatile delivery only for replaceable state', async () => {
+    vi.useFakeTimers();
     const reliable = { emit: vi.fn() };
     const volatile = { emit: vi.fn() };
     const server = { to: () => reliable, volatile: { to: () => volatile } };
     const publisher = new RealtimePublisher(server as never);
-    publisher.overview({ provider: 'alpaca', providerState: 'connected', symbols: [] });
-    publisher.symbols([]);
+    publisher.symbols([{ symbol: 'AAPL' }] as never);
     publisher.providerState('connected');
     publisher.alertsChanged();
     publisher.rulesChanged();
-    expect(volatile.emit.mock.calls.map(call => call[0])).toEqual(['overview:snapshot', 'symbols:snapshot', 'provider:state']);
-    expect(reliable.emit.mock.calls.map(call => call[0])).toEqual(['alerts:changed', 'rules:changed']);
+    publisher.watchlistChanged('u1', ['AAPL']);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(volatile.emit.mock.calls.map(call => call[0])).toEqual(['provider:state', 'symbols:snapshot']);
+    expect(reliable.emit.mock.calls.map(call => call[0])).toEqual(['alerts:changed', 'rules:changed', 'watchlist:changed']);
     publisher.close();
   });
 

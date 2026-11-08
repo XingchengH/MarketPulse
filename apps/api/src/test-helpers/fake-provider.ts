@@ -1,5 +1,5 @@
 import type { MarketEvent, ProviderState } from '@marketpulse/contracts';
-import type { MarketDataProvider, OperationalEvent } from '../market-data/provider.js';
+import type { MarketDataProvider, OperationalEvent, ProviderAsset } from '../market-data/provider.js';
 
 type TradeInput = Omit<Extract<MarketEvent, { type: 'trade' }>, 'provider' | 'feed' | 'type'>;
 
@@ -29,5 +29,12 @@ export class FakeMarketDataProvider implements MarketDataProvider {
   onOperationalEvent(listener: (event: OperationalEvent) => void) { this.operationalListeners.add(listener); return () => this.operationalListeners.delete(listener); }
   async getMarketClock() { return { isOpen: true, nextOpen: '', nextClose: '' }; }
   async lookupAsset(symbol: string) { return { symbol, tradable: true }; }
+  async listAssets(): Promise<ProviderAsset[]> {
+    return [
+      { symbol: 'AAPL', name: 'Apple Inc.', exchange: 'NASDAQ', assetClass: 'us_equity', status: 'active', tradable: true },
+      { symbol: 'MSFT', name: 'Microsoft Corporation', exchange: 'NASDAQ', assetClass: 'us_equity', status: 'active', tradable: true },
+      { symbol: 'NVDA', name: 'NVIDIA Corporation', exchange: 'NASDAQ', assetClass: 'us_equity', status: 'active', tradable: true },
+    ];
+  }
   private setState(state: ProviderState) { this.status = state; for (const listener of this.operationalListeners) listener({ type: 'state', state }); }
 }

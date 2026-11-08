@@ -6,10 +6,11 @@ export class FakeGoogleIdentityProvider implements GoogleIdentityProvider {
     if (process.env.NODE_ENV !== 'test') throw new Error('Fake Google provider is restricted to NODE_ENV=test');
   }
 
-  authorizationUrl(state: string): string {
+  authorizationUrl(state: string, options?: { selectAccount?: boolean }): string {
     const url = new URL(this.callbackUrl);
     url.searchParams.set('code', 'fake-google-code');
     url.searchParams.set('state', state);
+    if (options?.selectAccount === true) url.searchParams.set('prompt', 'select_account');
     return url.toString();
   }
 
