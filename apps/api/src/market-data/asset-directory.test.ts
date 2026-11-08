@@ -80,6 +80,17 @@ describe('AssetDirectory', () => {
     await expect(directory.search('app')).resolves.toEqual([]);
   });
 
+  it('serves a stale cache within maxStaleMs and rejects it after the stale window', async () => {
+    let now = 0;
+    const listAssets = vi.fn().mockResolvedValueOnce([asset('APP')]).mockRejectedValue(new Error('unavailable'));
+    const directory = new AssetDirectory({ listAssets }, { now: () => now, ttlMs: 10, maxStaleMs: 20 });
+    await directory.search('app');
+    now = 20;
+    await expect(directory.search('app')).resolves.toMatchObject([{ symbol: 'APP' }]);
+    now = 21;
+    await expect(directory.search('app')).rejects.toThrow('unavailable');
+  });
+
   it('propagates initial provider failures and clears the in-flight request for retry', async () => {
     const listAssets = vi.fn().mockRejectedValueOnce(new Error('unavailable')).mockResolvedValueOnce([asset('APP')]);
     const directory = new AssetDirectory({ listAssets });

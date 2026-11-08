@@ -14,6 +14,7 @@ export interface AssetSearchResult {
 
 export interface AssetDirectoryOptions {
   ttlMs?: number;
+  maxStaleMs?: number;
   now?: () => number;
   maxResults?: number;
 }
@@ -25,6 +26,7 @@ interface CachedAssetDirectory {
 
 export class AssetDirectory {
   private readonly ttlMs: number;
+  private readonly maxStaleMs: number;
   private readonly now: () => number;
   private readonly maxResults: number;
   private cache?: CachedAssetDirectory;
@@ -32,6 +34,7 @@ export class AssetDirectory {
 
   constructor(private readonly provider: AssetDirectoryProvider, options: AssetDirectoryOptions = {}) {
     this.ttlMs = options.ttlMs ?? 15 * 60_000;
+    this.maxStaleMs = options.maxStaleMs ?? 60 * 60_000;
     this.now = options.now ?? Date.now;
     this.maxResults = options.maxResults ?? 10;
   }
@@ -65,7 +68,7 @@ export class AssetDirectory {
     try {
       return await this.refresh();
     } catch (error) {
-      if (this.cache) return this.cache;
+      if (this.cache && this.now() - this.cache.refreshedAt <= this.maxStaleMs) return this.cache;
       throw error;
     }
   }

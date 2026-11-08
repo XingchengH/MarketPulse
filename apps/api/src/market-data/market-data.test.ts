@@ -5,6 +5,7 @@ import { MarketClockCache } from './market-clock.js';
 import { ReconnectBackoff } from './reconnect.js';
 import { AlpacaProvider } from './alpaca-provider.js';
 import { MinuteMetricWriter } from './minute-writer.js';
+import { AssetDirectory } from './asset-directory.js';
 import { bootstrapDefaultWatchlist, DEFAULT_WATCHLIST } from '../models/watchlist.js';
 
 describe('Alpaca market data', () => {
@@ -17,7 +18,8 @@ describe('Alpaca market data', () => {
       { ...record, symbol: '' }, { ...record, symbol: 'BAD/SYMBOL' }, { ...record, name: ' ' },
       { ...record, tradable: 'true' }, { ...record, status: undefined }, { ...record, exchange: 123 }, null,
     ]));
-    const provider = new AlpacaProvider({ apiKey: 'key', apiSecret: 'secret', tradingBaseUrl: 'https://api.alpaca.markets', fetch: fetcher as typeof fetch });
+    const setTimeout = vi.fn((_callback: () => void, _delay: number) => 1);
+    const provider = new AlpacaProvider({ apiKey: 'key', apiSecret: 'secret', tradingBaseUrl: 'https://api.alpaca.markets', fetch: fetcher as typeof fetch, setTimeout, clearTimeout: vi.fn() });
     await expect(provider.listAssets()).resolves.toEqual([
       { symbol: 'AAPL', name: 'Apple Inc.', exchange: 'NASDAQ', assetClass: 'us_equity', status: 'active', tradable: true },
       { symbol: 'HALT', name: 'Apple Inc.', exchange: 'NASDAQ', assetClass: 'us_equity', status: 'active', tradable: false },
@@ -25,7 +27,9 @@ describe('Alpaca market data', () => {
     ]);
     expect(fetcher).toHaveBeenCalledExactlyOnceWith('https://api.alpaca.markets/v2/assets?status=active&asset_class=us_equity', {
       headers: { 'APCA-API-KEY-ID': 'key', 'APCA-API-SECRET-KEY': 'secret' },
+      signal: expect.any(AbortSignal),
     });
+    expect(setTimeout).toHaveBeenCalledWith(expect.any(Function), 10_000);
   });
 
   it('surfaces asset-list failures without exposing response details or credentials', async () => {
@@ -35,9 +39,49 @@ describe('Alpaca market data', () => {
     expect(fetcher.mock.calls[0][0]).toBe('https://paper-api.alpaca.markets/v2/assets?status=active&asset_class=us_equity');
   });
 
+  it('preserves an abort error returned by the fetch implementation', async () => {
+    const abortError = new DOMException('Request cancelled', 'AbortError');
+    const provider = new AlpacaProvider({ apiKey: 'key', apiSecret: 'secret', fetch: vi.fn(async () => { throw abortError; }) as typeof fetch });
+    await expect(provider.listAssets()).rejects.toBe(abortError);
+  });
+
   it('rejects a malformed asset-list payload rather than caching an empty directory', async () => {
     const provider = new AlpacaProvider({ apiKey: 'key', apiSecret: 'secret', fetch: vi.fn(async () => Response.json({ message: 'unexpected' })) as typeof fetch });
     await expect(provider.listAssets()).rejects.toThrow('Invalid Alpaca assets response');
+  });
+
+  it('times out asset-list fetches, serves stale data, and recovers on the next refresh', async () => {
+    let timeout: (() => void) | undefined;
+    let timeoutDelay = 0;
+    const clearTimeout = vi.fn();
+    let fetchCount = 0;
+    const fetcher = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      fetchCount += 1;
+      if (fetchCount === 1 || fetchCount === 3) {
+        const symbol = fetchCount === 1 ? 'AAPL' : 'MSFT';
+        return Promise.resolve(Response.json([{ symbol, name: `${symbol} Inc.`, exchange: 'NASDAQ', class: 'us_equity', status: 'active', tradable: true }])) as Promise<Response>;
+      }
+      return new Promise<Response>((_resolve, reject) => {
+        init?.signal?.addEventListener('abort', () => reject(init.signal?.reason ?? new DOMException('Aborted', 'AbortError')), { once: true });
+      });
+    });
+    const provider = new AlpacaProvider({
+      apiKey: 'key', apiSecret: 'secret', fetch: fetcher as typeof fetch,
+      assetRequestTimeoutMs: 1_234,
+      setTimeout: (callback, delay) => { timeout = callback; timeoutDelay = delay; return 1; }, clearTimeout,
+    });
+    let now = 0;
+    const directory = new AssetDirectory(provider, { now: () => now, ttlMs: 0, maxStaleMs: 60_000 });
+    await expect(directory.search('aap')).resolves.toMatchObject([{ symbol: 'AAPL' }]);
+    now = 1;
+    const staleResult = directory.search('aap');
+    expect(timeout).toBeTypeOf('function');
+    expect(timeoutDelay).toBe(1_234);
+    timeout?.();
+    await expect(staleResult).resolves.toMatchObject([{ symbol: 'AAPL' }]);
+    expect(clearTimeout).toHaveBeenCalledWith(1);
+    await expect(directory.search('ms')).resolves.toMatchObject([{ symbol: 'MSFT' }]);
+    expect(fetcher).toHaveBeenCalledTimes(3);
   });
 
   it('preserves single-asset lookup behavior', async () => {
