@@ -127,7 +127,7 @@ describe('personal watchlist persistence', () => {
     const user = await createUser();
     const added = await service.add(user, asset('AAPL'), audit('added'));
     expect(added).toMatchObject({ status: 'updated', unionChanged: true, watchlist: { used: 1 } });
-    expect(await AuditEvent.findOne({ requestId: 'added' }).lean()).toMatchObject({ actorId: 'actor', action: 'watchlist.symbol_added', resourceType: 'watchlist', resourceId: 'AAPL', before: { symbols: [] }, after: { symbols: ['AAPL'] } });
+    expect(await AuditEvent.findOne({ requestId: 'added' }).lean()).toMatchObject({ ownerUserId: user, actorId: 'actor', action: 'watchlist.symbol_added', resourceType: 'watchlist', resourceId: 'AAPL', before: { symbols: [] }, after: { symbols: ['AAPL'] } });
     vi.spyOn(AuditEvent, 'create').mockRejectedValueOnce(new Error('audit unavailable') as never);
     await expect(service.add(user, asset('MSFT'), audit('failed-add'))).rejects.toThrow('audit unavailable');
     expect(await service.symbols(user)).toEqual(['AAPL']);
@@ -136,7 +136,7 @@ describe('personal watchlist persistence', () => {
     expect(await service.symbols(user)).toEqual(['AAPL']);
     const removed = await service.remove(user, 'AAPL', audit('removed'));
     expect(removed).toMatchObject({ status: 'updated', unionChanged: true, watchlist: { used: 0 } });
-    expect(await AuditEvent.findOne({ requestId: 'removed' }).lean()).toMatchObject({ action: 'watchlist.symbol_removed', before: { symbols: ['AAPL'] }, after: { symbols: [] } });
+    expect(await AuditEvent.findOne({ requestId: 'removed' }).lean()).toMatchObject({ ownerUserId: user, action: 'watchlist.symbol_removed', before: { symbols: ['AAPL'] }, after: { symbols: [] } });
     expect(await AuditEvent.countDocuments()).toBe(2);
   });
 

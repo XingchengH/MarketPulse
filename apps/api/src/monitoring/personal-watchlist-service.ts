@@ -119,6 +119,7 @@ export class PersonalWatchlistService {
         }
         const watchlist = await this.readList(userId, session);
         await AuditEvent.create([{
+          ownerUserId: String(userId),
           actorId: context.actorId, requestId: context.requestId,
           action: `watchlist.symbol_${type === 'add' ? 'added' : 'removed'}`,
           resourceType: 'watchlist', resourceId: symbol,
