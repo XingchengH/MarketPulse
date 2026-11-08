@@ -17,7 +17,7 @@ export class RealtimePublisher {
   private snapshotRequest?: SnapshotRequest;
   private snapshotBuilding = false;
   private snapshotTimer?: NodeJS.Timeout;
-  private snapshotCursor = 0;
+  private snapshotCursor?: string;
   private lastSnapshotBuild = Number.NEGATIVE_INFINITY;
   private closed = false;
   constructor(
@@ -115,6 +115,7 @@ export class RealtimePublisher {
     try {
       const snapshots = await Promise.all(symbols.map(symbol => request.snapshot(symbol)));
       if (this.closed) return;
+      if (symbols.length > 0) this.snapshotCursor = symbols.at(-1);
       this.symbols(snapshots as SymbolsSnapshotEvent);
     } finally {
       this.snapshotBuilding = false;
@@ -124,16 +125,21 @@ export class RealtimePublisher {
   private nextSnapshotBatch(input: readonly string[]): string[] {
     const symbols = [...new Set(input.map(symbol => symbol.trim().toUpperCase()).filter(Boolean))];
     const limit = Math.max(0, Math.floor(this.options.maxSymbols ?? 500));
-    if (symbols.length <= limit || limit === 0) {
-      this.snapshotCursor = 0;
-      return symbols.slice(0, limit);
-    }
-    // The limit bounds a build, not the eligible union. Reduce the retained
-    // cursor against the current union so additions/removals remain safe.
-    const start = this.snapshotCursor % symbols.length;
-    const batch = symbols.slice(start, start + limit);
-    if (batch.length < limit) batch.push(...symbols.slice(0, limit - batch.length));
-    this.snapshotCursor = (start + batch.length) % symbols.length;
+    if (limit === 0 || symbols.length === 0) return [];
+    if (symbols.length <= limit) return symbols;
+    const cursorIndex = this.snapshotCursor === undefined ? -1 : symbols.indexOf(this.snapshotCursor);
+    // Prefer the cursor's current position, which remains meaningful if the
+    // provider reorders the union. If the cursor was removed from the sorted
+    // union, choose the next lexical symbol as a stable insertion point.
+    const successor = this.snapshotCursor === undefined
+      ? 0
+      : symbols.findIndex(symbol => symbol > this.snapshotCursor!);
+    const offset = cursorIndex >= 0
+      ? (cursorIndex + 1) % symbols.length
+      : successor < 0 ? 0 : successor;
+    const count = Math.min(limit, symbols.length);
+    const batch = symbols.slice(offset, offset + count);
+    if (batch.length < count) batch.push(...symbols.slice(0, count - batch.length));
     return batch;
   }
   close() {
@@ -147,6 +153,6 @@ export class RealtimePublisher {
     this.symbolImmediate = undefined;
     this.snapshotTimer = undefined;
     this.snapshotRequest = undefined;
-    this.snapshotCursor = 0;
+    this.snapshotCursor = undefined;
   }
 }

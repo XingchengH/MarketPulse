@@ -352,13 +352,52 @@ describe('realtime server', () => {
       expect(snapshot.mock.calls.map(([symbol]) => symbol)).toEqual(expected);
     };
     await build(['A', 'B', 'C', 'D', 'E'], ['A', 'B']);
-    await build(['A', 'C', 'D', 'E'], ['D', 'E']);
-    await build(['A', 'C', 'D', 'E'], ['A', 'C']);
+    await build(['A', 'C', 'D', 'E'], ['C', 'D']);
+    await build(['A', 'C', 'D', 'E'], ['E', 'A']);
     await build([], []);
     await build(['X', 'Y', 'X'], ['X', 'Y']);
-    await build(['X', 'Y', 'Z'], ['X', 'Y']);
     await build(['X', 'Y', 'Z'], ['Z', 'X']);
-    await build([' aapl ', 'AAPL', 'MSFT', 'TSLA'], ['MSFT', 'TSLA']);
+    await build(['X', 'Y', 'Z'], ['Y', 'Z']);
+    await build([' aapl ', 'AAPL', 'MSFT', 'TSLA'], ['AAPL', 'MSFT']);
+    publisher.close();
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('continues after the last completed symbol when the sorted union changes', async () => {
+    vi.useFakeTimers();
+    const snapshot = vi.fn(async (symbol: string) => ({ symbol }));
+    const publisher = new RealtimePublisher({ to: () => ({ emit: vi.fn() }) } as never, { intervalMs: 0, maxSymbols: 2 });
+    const build = async (symbols: string[]) => {
+      snapshot.mockClear();
+      publisher.requestSnapshots({ provider: 'alpaca', providerState: 'connected', symbols, snapshot });
+      await vi.runAllTimersAsync();
+      return snapshot.mock.calls.map(([symbol]) => symbol);
+    };
+
+    expect(await build(['A', 'B', 'C', 'D', 'E'])).toEqual(['A', 'B']);
+    expect(await build(['A', 'C', 'D', 'E', 'F'])).toEqual(['C', 'D']);
+    expect(await build(['A', 'B', 'C', 'E', 'F', 'G'])).toEqual(['E', 'F']);
+    expect(await build(['A', 'B', 'C', 'E', 'F', 'G'])).toEqual(['G', 'A']);
+    expect(await build(['D', 'E', 'C', 'A', 'B', 'F', 'G'])).toEqual(['B', 'F']);
+
+    publisher.close();
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('advances the batch cursor only after a build completes successfully', async () => {
+    vi.useFakeTimers();
+    const snapshot = vi.fn(async (symbol: string) => ({ symbol }));
+    snapshot.mockRejectedValueOnce(new Error('temporary snapshot failure'));
+    const publisher = new RealtimePublisher({ to: () => ({ emit: vi.fn() }) } as never, { intervalMs: 0, maxSymbols: 2 });
+    const request = () => publisher.requestSnapshots({ provider: 'alpaca', providerState: 'connected', symbols: ['A', 'B', 'C'], snapshot });
+
+    request();
+    await vi.runAllTimersAsync();
+    snapshot.mockClear();
+    request();
+    await vi.runAllTimersAsync();
+    expect(snapshot.mock.calls.map(([symbol]) => symbol)).toEqual(['A', 'B']);
+
     publisher.close();
     expect(vi.getTimerCount()).toBe(0);
   });
