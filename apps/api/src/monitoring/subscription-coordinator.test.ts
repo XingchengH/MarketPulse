@@ -52,6 +52,23 @@ describe('SubscriptionCoordinator', () => {
     expect(coordinator.symbols()).toEqual(['MSFT', 'NVDA']);
   });
 
+  it('applies a refresh arriving after the drain exits and before the previous shared promise settles', async () => {
+    let symbols = ['AAPL'];
+    const pending = deferred();
+    const provider = { replaceSubscriptions: vi.fn(async (_symbols: string[]) => { await pending.promise; }) };
+    const coordinator = new SubscriptionCoordinator({ union: async () => symbols }, provider);
+    const first = coordinator.refresh();
+    await Promise.resolve();
+    pending.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+    symbols = ['MSFT'];
+    const second = coordinator.refresh();
+    await Promise.all([first, second]);
+    expect(provider.replaceSubscriptions.mock.calls).toEqual([[['AAPL']], [['MSFT']]]);
+    expect(coordinator.symbols()).toEqual(['MSFT']);
+  });
+
   it('retains the applied cache on provider failure and retries the authoritative union on the next refresh', async () => {
     let symbols = ['AAPL'];
     const provider = { replaceSubscriptions: vi.fn(async (_symbols: string[]) => undefined) };
@@ -76,6 +93,16 @@ describe('SubscriptionCoordinator', () => {
     expect(provider.replaceSubscriptions).not.toHaveBeenCalled();
     await coordinator.refresh();
     expect(coordinator.symbols()).toEqual(['AAPL']);
+  });
+
+  it('releases the running marker after a synchronous repository failure', async () => {
+    const repository = { union: vi.fn<() => Promise<string[]>>().mockImplementationOnce(() => { throw new Error('synchronous failure'); }).mockResolvedValue(['MSFT']) };
+    const provider = { replaceSubscriptions: vi.fn(async (_symbols: string[]) => undefined) };
+    const coordinator = new SubscriptionCoordinator(repository, provider);
+    await expect(coordinator.refresh()).rejects.toThrow('synchronous failure');
+    await coordinator.refresh();
+    expect(provider.replaceSubscriptions).toHaveBeenCalledExactlyOnceWith(['MSFT']);
+    expect(coordinator.symbols()).toEqual(['MSFT']);
   });
 
   it('reapplies the previous union after a failed replacement that may have partially changed the provider', async () => {

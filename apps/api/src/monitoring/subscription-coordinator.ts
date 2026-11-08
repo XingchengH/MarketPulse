@@ -23,8 +23,13 @@ export class SubscriptionCoordinator {
   private enqueue(connect?: (symbols: string[]) => Promise<void>): Promise<void> {
     this.dirty = true;
     if (this.inFlight) return this.inFlight;
-    const request = this.drain(connect).finally(() => { this.inFlight = undefined; });
+    let resolve!: () => void;
+    let reject!: (error: unknown) => void;
+    const request = new Promise<void>((done, failed) => { resolve = done; reject = failed; });
+    // Install the shared promise before drain starts, including when a repository
+    // throws synchronously before its first await.
     this.inFlight = request;
+    void this.drain(connect).then(resolve, reject);
     return request;
   }
 
@@ -50,6 +55,11 @@ export class SubscriptionCoordinator {
     } catch (error) {
       this.healthy = false;
       throw error;
+    } finally {
+      // Release the running marker in the same synchronous continuation as the
+      // final dirty check. A later refresh must start a new drain, even before
+      // this drain's shared promise has settled.
+      this.inFlight = undefined;
     }
   }
 }
