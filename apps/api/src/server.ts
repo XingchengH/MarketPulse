@@ -24,6 +24,7 @@ import { createRealtimeServer } from './realtime/socket-server.js';
 import { RealtimePublisher } from './realtime/publisher.js';
 import { PersonalWatchlistService } from './monitoring/personal-watchlist-service.js';
 import { SubscriptionCoordinator } from './monitoring/subscription-coordinator.js';
+import { SubscriptionRefreshRetry } from './monitoring/subscription-refresh-retry.js';
 import { AssetDirectory } from './market-data/asset-directory.js';
 import { BootstrapAttempt } from './bootstrap-attempt.js';
 import { bootstrapPersonalWatchlists, createWatchlistInitializationReader } from './bootstrap-personal-watchlists.js';
@@ -55,17 +56,7 @@ async function initialize(): Promise<void> {
     const alertService = new AlertService(() => publisher?.alertsChanged());
     const ruleService = new RuleService(() => publisher?.rulesChanged());
     let subscriptionsStarted = false;
-    const refreshSubscriptions = async () => {
-      try {
-        await subscriptions.refresh();
-        publisher?.providerState(providerState());
-      } catch {
-        // Persistence already committed. Keep it authoritative and advertise the
-        // degraded subscription state until a subsequent refresh succeeds.
-        publisher?.providerState('unavailable');
-        console.error({ component: 'subscriptions' }, 'Market subscription refresh failed');
-      }
-    };
+    const refreshSubscriptions = () => subscriptionRefresh.refresh();
     const watchlistService = new PersonalWatchlistService(async userId => {
       if (subscriptionsStarted) await refreshSubscriptions();
       if (!realtime) return;
@@ -81,6 +72,16 @@ async function initialize(): Promise<void> {
     });
     const subscriptions = new SubscriptionCoordinator(watchlistService, marketProvider);
     const providerState = () => subscriptions.isHealthy() ? marketProvider.state() : 'unavailable' as const;
+    const subscriptionRefresh = new SubscriptionRefreshRetry(subscriptions, {
+      onSuccess: () => publisher?.providerState(providerState()),
+      onFailure: () => {
+        // The mutation is committed; keep readiness degraded until the
+        // lifecycle-owned retry has successfully applied the database union.
+        publisher?.providerState('unavailable');
+        console.error({ component: 'subscriptions' }, 'Market subscription refresh failed; retry scheduled');
+      },
+    });
+    attempt.defer(() => subscriptionRefresh.close());
     const assetDirectory = new AssetDirectory(marketProvider);
     const repository = new MongooseAuthRepository(async userId => {
       await watchlistService.initializeUser(userId);
@@ -131,7 +132,7 @@ async function initialize(): Promise<void> {
     // Socket.IO is attached only after every fallible bootstrap step above has succeeded.
     realtime = createRealtimeServer(server, { tokens, findCurrentUser: id => repository.findUserById(id), symbolsForUser: id => watchlistService.symbols(id), webOrigin: config.webOrigin });
     publisher = new RealtimePublisher(realtime);
-    shutdown = createGracefulShutdown({ server, socket: { close: () => new Promise<void>(resolve => realtime!.close(() => resolve())) }, provider: marketProvider, monitoring: { stop: () => { monitoring.stop(); publisher?.close(); } }, metrics: { flush: () => minuteWriter.stop() }, database });
+    shutdown = createGracefulShutdown({ server, socket: { close: () => new Promise<void>(resolve => realtime!.close(() => resolve())) }, provider: marketProvider, monitoring: { stop: () => { subscriptionRefresh.close(); monitoring.stop(); publisher?.close(); } }, metrics: { flush: () => minuteWriter.stop() }, database });
     application = fullApplication;
     servicesReady = true;
     attempt.commit();
@@ -153,6 +154,7 @@ void initialize();
 
 const stop = (signal: string) => {
   stopped = true;
+  servicesReady = false;
   if (shutdown) void shutdown(signal);
   else server.close(() => void database.disconnect());
 };
