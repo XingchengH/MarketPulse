@@ -1,5 +1,5 @@
 import { Activity, Bell, ChevronUp, FileClock, LayoutDashboard, LogOut, Menu, Moon, Radio, Settings, SlidersHorizontal, Sun, UserRound, X } from 'lucide-react';
-import { useEffect, useId, useRef, useState, type KeyboardEvent, type ReactNode } from 'react';
+import { useEffect, useId, useLayoutEffect, useRef, useState, type KeyboardEvent, type ReactNode } from 'react';
 import { useDispatch } from 'react-redux';
 import { NavLink, useLocation } from 'react-router-dom';
 import { api, useAlertsQuery, useLogoutMutation, useSessionQuery, useSwitchAccountMutation, type User } from '../api';
@@ -23,6 +23,11 @@ function AccountMenu({ user, navigateToGoogle }: { user: User; navigateToGoogle:
   const [switchAccount] = useSwitchAccountMutation();
 
   useEffect(() => { setOpen(false); }, [location.pathname]);
+  useLayoutEffect(() => {
+    // Disabled actions cannot retain focus. Keep Escape and menu navigation
+    // available during cleanup, including when the pending menu is reopened.
+    if (open && (pending || error)) menu.current?.focus();
+  }, [open, pending, error]);
   useEffect(() => {
     if (!open) return;
     menu.current?.querySelector<HTMLButtonElement>('[role="menuitem"]:not(:disabled)')?.focus();
@@ -59,6 +64,7 @@ function AccountMenu({ user, navigateToGoogle }: { user: User; navigateToGoogle:
     } else if (['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key)) {
       event.preventDefault();
       const items = [...(menu.current?.querySelectorAll<HTMLButtonElement>('[role="menuitem"]:not(:disabled)') ?? [])];
+      if (!items.length) return;
       const index = items.indexOf(document.activeElement as HTMLButtonElement);
       const next = event.key === 'Home' ? 0 : event.key === 'End' ? items.length - 1 : (index + (event.key === 'ArrowDown' ? 1 : -1) + items.length) % items.length;
       items[next]?.focus();
@@ -77,7 +83,7 @@ function AccountMenu({ user, navigateToGoogle }: { user: User; navigateToGoogle:
       <span className="avatar" aria-hidden="true">{user.name.split(' ').map(part => part[0]).join('').slice(0, 2)}</span>
       <span className="profile-copy"><strong>{user.name}</strong><small>{user.role}</small></span><ChevronUp size={15} aria-hidden="true" />
     </button>
-    {open && <div ref={menu} id={menuId} role="menu" aria-label="Account actions" aria-busy={pending} className="profile-menu" onKeyDown={onKeyDown}>
+    {open && <div ref={menu} id={menuId} role="menu" tabIndex={-1} aria-label="Account actions" aria-busy={pending} className="profile-menu" onKeyDown={onKeyDown}>
       <div role="none" className="profile-details"><strong>{user.name}</strong><span>{user.email}</span><small>{user.role}</small></div>
       <button role="menuitem" disabled={pending} onClick={() => void endSession(true)}><UserRound size={16} aria-hidden="true" />Switch account</button>
       <button role="menuitem" disabled={pending} onClick={() => void endSession(false)}><LogOut size={16} aria-hidden="true" />Sign out</button>

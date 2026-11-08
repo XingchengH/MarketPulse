@@ -85,6 +85,14 @@ describe('application profile menu', () => {
     // Chromium blurs a focused button when it becomes disabled.
     fireEvent.blur(signOut, { relatedTarget: null });
     expect(screen.getByRole('menu')).toBeInTheDocument();
+    expect(screen.getByRole('menu')).toHaveFocus();
+    await keyboard.keyboard('{ArrowDown}');
+    expect(screen.getByRole('menu')).toHaveFocus();
+    await keyboard.keyboard('{Escape}');
+    expect(screen.queryByRole('menu')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Account menu for Morgan Lee' })).toHaveFocus();
+    await keyboard.keyboard('{Enter}');
+    expect(screen.getByRole('menu')).toHaveFocus();
     expect(screen.getByRole('menuitem', { name: 'Switch account' })).toBeDisabled();
     expect(fetcher.mock.calls.filter(([url]) => String(url) === '/api/auth/logout')).toHaveLength(1);
     expect(screen.getByRole('heading', { name: 'Workspace content' })).toBeInTheDocument();
@@ -138,6 +146,13 @@ describe('application profile menu', () => {
     await keyboard.click(await screen.findByRole('button', { name: 'Account menu for Morgan Lee' }));
     await keyboard.click(screen.getByRole('menuitem', { name: action }));
     expect(await screen.findByRole('alert')).toHaveTextContent('Please try again');
+    expect(screen.getByRole('menu')).toHaveFocus();
+    await keyboard.keyboard('{ArrowDown}');
+    expect(screen.getByRole('menuitem', { name: 'Switch account' })).toHaveFocus();
+    await keyboard.keyboard('{Escape}');
+    expect(screen.queryByRole('menu')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Account menu for Morgan Lee' })).toHaveFocus();
+    await keyboard.keyboard('{Enter}');
     expect(screen.getByRole('menuitem', { name: action })).toBeEnabled();
     expect(screen.getByRole('heading', { name: 'Workspace content' })).toBeInTheDocument();
     expect(socket.close).not.toHaveBeenCalled();
