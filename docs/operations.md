@@ -28,6 +28,8 @@ Free Render services can sleep and restart, interrupting WebSocket sessions and 
 
 The subscription coordinator, aggregation, and Socket.IO rooms live in one API process. Running multiple replicas requires a deliberate shared subscription strategy and cross-process membership/event delivery; simply adding replicas can duplicate Alpaca connections and leave another process's socket memberships stale.
 
+Realtime snapshot construction uses rotating batches of at most 500 distinct symbols per build (`maxSymbols` in the publisher). Ongoing market events request builds at the bounded publication cadence. For a stable union of N symbols, every symbol is selected within `ceil(N / 500)` successive builds; larger unions increase the refresh cycle without excluding symbols at the end of the list. A union of at most 500 symbols is included in every build. Symbol delivery remains volatile and room-scoped, and REST remains authoritative for personal membership and initial data.
+
 ## Verification
 
 Run from the repository root with a local `mongod` available or permission for `mongodb-memory-server` to download its binary. API integration tests create disposable replica sets and require local socket access.

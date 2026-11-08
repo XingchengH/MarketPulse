@@ -297,6 +297,72 @@ describe('realtime server', () => {
     publisher.close();
   });
 
+  it.each([501, 1_001])('rotates bounded snapshot builds fairly through a %i-symbol union', async count => {
+    vi.useFakeTimers();
+    const symbols = Array.from({ length: count }, (_, index) => `S${String(index).padStart(4, '0')}`);
+    const rooms: string[] = [];
+    const snapshot = vi.fn(async (symbol: string) => ({ symbol }));
+    const server = { volatile: { to: (room: string) => ({ emit: () => rooms.push(room) }) } };
+    const publisher = new RealtimePublisher(server as never, { intervalMs: 0 });
+    const batches: string[][] = [];
+    const cycle = Math.ceil(count / 500);
+    for (let build = 0; build < cycle + 1; build += 1) {
+      snapshot.mockClear();
+      rooms.length = 0;
+      publisher.requestSnapshots({ provider: 'alpaca', providerState: 'connected', symbols, snapshot });
+      await vi.runAllTimersAsync();
+      const expected = Array.from({ length: 500 }, (_, index) => symbols[(build * 500 + index) % count]!);
+      const batch = snapshot.mock.calls.map(([symbol]) => symbol);
+      expect(batch).toEqual(expected);
+      expect(new Set(batch).size).toBe(500);
+      expect(rooms).toEqual(expected.map(symbol => `symbol:${symbol}`));
+      batches.push(batch);
+    }
+    // Every full rotation window covers the tail as well as the first symbols.
+    for (let start = 0; start <= batches.length - cycle; start += 1) {
+      expect(new Set(batches.slice(start, start + cycle).flat()).size).toBe(count);
+    }
+    publisher.close();
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it.each([0, 1, 499, 500])('keeps the full %i-symbol union in every build when it fits the batch', async count => {
+    vi.useFakeTimers();
+    const symbols = Array.from({ length: count }, (_, index) => `S${index}`);
+    const snapshot = vi.fn(async (symbol: string) => ({ symbol }));
+    const publisher = new RealtimePublisher({ to: () => ({ emit: vi.fn() }) } as never, { intervalMs: 0 });
+    for (let build = 0; build < 2; build += 1) {
+      snapshot.mockClear();
+      publisher.requestSnapshots({ provider: 'alpaca', providerState: 'connected', symbols, snapshot });
+      await vi.runAllTimersAsync();
+      expect(snapshot.mock.calls.map(([symbol]) => symbol)).toEqual(symbols);
+    }
+    publisher.close();
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('wraps the snapshot cursor safely across union changes, duplicates, and empty lists', async () => {
+    vi.useFakeTimers();
+    const snapshot = vi.fn(async (symbol: string) => ({ symbol }));
+    const publisher = new RealtimePublisher({ to: () => ({ emit: vi.fn() }) } as never, { intervalMs: 0, maxSymbols: 2 });
+    const build = async (symbols: string[], expected: string[]) => {
+      snapshot.mockClear();
+      publisher.requestSnapshots({ provider: 'alpaca', providerState: 'connected', symbols, snapshot });
+      await vi.runAllTimersAsync();
+      expect(snapshot.mock.calls.map(([symbol]) => symbol)).toEqual(expected);
+    };
+    await build(['A', 'B', 'C', 'D', 'E'], ['A', 'B']);
+    await build(['A', 'C', 'D', 'E'], ['D', 'E']);
+    await build(['A', 'C', 'D', 'E'], ['A', 'C']);
+    await build([], []);
+    await build(['X', 'Y', 'X'], ['X', 'Y']);
+    await build(['X', 'Y', 'Z'], ['X', 'Y']);
+    await build(['X', 'Y', 'Z'], ['Z', 'X']);
+    await build([' aapl ', 'AAPL', 'MSFT', 'TSLA'], ['MSFT', 'TSLA']);
+    publisher.close();
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
   it('discards an overdue throttled value when a newer symbol update arrives first', async () => {
     vi.useFakeTimers();
     let now = 0;

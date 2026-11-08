@@ -17,6 +17,7 @@ export class RealtimePublisher {
   private snapshotRequest?: SnapshotRequest;
   private snapshotBuilding = false;
   private snapshotTimer?: NodeJS.Timeout;
+  private snapshotCursor = 0;
   private lastSnapshotBuild = Number.NEGATIVE_INFINITY;
   private closed = false;
   constructor(
@@ -110,7 +111,7 @@ export class RealtimePublisher {
     this.snapshotRequest = undefined;
     this.snapshotBuilding = true;
     this.lastSnapshotBuild = this.now();
-    const symbols = request.symbols.slice(0, this.options.maxSymbols ?? 500);
+    const symbols = this.nextSnapshotBatch(request.symbols);
     try {
       const snapshots = await Promise.all(symbols.map(symbol => request.snapshot(symbol)));
       if (this.closed) return;
@@ -119,6 +120,21 @@ export class RealtimePublisher {
       this.snapshotBuilding = false;
       this.scheduleSnapshotBuild();
     }
+  }
+  private nextSnapshotBatch(input: readonly string[]): string[] {
+    const symbols = [...new Set(input.map(symbol => symbol.trim().toUpperCase()).filter(Boolean))];
+    const limit = Math.max(0, Math.floor(this.options.maxSymbols ?? 500));
+    if (symbols.length <= limit || limit === 0) {
+      this.snapshotCursor = 0;
+      return symbols.slice(0, limit);
+    }
+    // The limit bounds a build, not the eligible union. Reduce the retained
+    // cursor against the current union so additions/removals remain safe.
+    const start = this.snapshotCursor % symbols.length;
+    const batch = symbols.slice(start, start + limit);
+    if (batch.length < limit) batch.push(...symbols.slice(0, limit - batch.length));
+    this.snapshotCursor = (start + batch.length) % symbols.length;
+    return batch;
   }
   close() {
     this.closed = true;
@@ -131,5 +147,6 @@ export class RealtimePublisher {
     this.symbolImmediate = undefined;
     this.snapshotTimer = undefined;
     this.snapshotRequest = undefined;
+    this.snapshotCursor = 0;
   }
 }
