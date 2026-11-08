@@ -28,7 +28,7 @@ describe('dashboard realtime cache', () => {
     const store = makeStore();
     await store.dispatch(api.util.upsertQueryData('symbols', undefined, { symbols: [row(41)] }));
     await store.dispatch(api.util.upsertQueryData('overview', undefined, { provider: 'alpaca', providerState: 'connected', symbols: ['AAPL'] }));
-    await store.dispatch(api.util.upsertQueryData('watchlist', undefined, { watchlist: [] }));
+    await store.dispatch(api.util.upsertQueryData('watchlist', undefined, { watchlist: { entries: [], used: 0, limit: 25 } }));
     await store.dispatch(api.util.upsertQueryData('alerts', undefined, { alerts: [] }));
     const handlers = new Map<string, () => void>();
     const on = vi.fn((name: string, fn: () => void) => { handlers.set(name, fn); });
@@ -61,6 +61,7 @@ describe('dashboard realtime cache', () => {
   });
   it('renders REST 41 msg/s and then the socket 55 msg/s snapshot', async () => {
     const store = makeStore(); await store.dispatch(api.util.upsertQueryData('symbols', undefined, { symbols:[row(41)] })); await store.dispatch(api.util.upsertQueryData('overview', undefined, { provider:'alpaca', providerState:'connected', symbols:['AAPL'] }));
+    await store.dispatch(api.util.upsertQueryData('watchlist', undefined, { watchlist: { entries: [{ id: 'aapl', symbol: 'AAPL', companyName: 'Apple Inc.', assetClass: 'us_equity', createdAt: '2026-11-01T00:00:00Z' }], used: 1, limit: 25 } }));
     const handlers = new Map<string, (...args: unknown[]) => void>(); const socket = { on: vi.fn((name:string, fn:(...args:unknown[])=>void) => { handlers.set(name,fn); return socket; }), close:vi.fn(), io:{on:vi.fn()} }; bindSocket(store,socket as never);
     render(createElement(Provider, { store, children: createElement(FeedsPage) })); expect(screen.getByText('41')).toBeInTheDocument(); expect(screen.getByText('IEX')).toBeInTheDocument(); await userEvent.click(screen.getByRole('button',{name:'AAPL'})); expect(screen.getByText('41 msg/s')).toBeInTheDocument(); handlers.get('symbols:snapshot')?.([row(55)]); await waitFor(() => expect(screen.getByText('55 msg/s')).toBeInTheDocument()); cleanup();
   });
