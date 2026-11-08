@@ -15,7 +15,9 @@ export interface AuditEvent { _id: string; actorId: string; action: string; reso
 export interface ApiError { status: number | string; data?: { error?: { code?: string; message?: string } } }
 
 let refreshRequest: Promise<boolean> | undefined;
+let endingSession = false;
 export function refreshSession(): Promise<boolean> {
+  if (endingSession) return Promise.resolve(false);
   if (!refreshRequest) {
     refreshRequest = fetch('/api/auth/refresh', { method: 'POST', credentials: 'include' })
       .then(response => response.ok)
@@ -37,10 +39,22 @@ async function request(value: string | FetchArgs): Promise<HttpResult> {
   } catch { return { error: { status: 'FETCH_ERROR' } }; }
 }
 
-export const httpBaseQuery: BaseQueryFn<string | FetchArgs, unknown, ApiError> = async value => {
+export const httpBaseQuery: BaseQueryFn<string | FetchArgs, unknown, ApiError> = async (value, context) => {
+  const url = typeof value === 'string' ? value : value.url;
+  if (url === '/auth/logout' || url === '/auth/switch-account') {
+    // Let an already-issued refresh finish setting cookies before clearing them.
+    // New renewals and automatic 401 retries must not race session cleanup.
+    endingSession = true;
+    try {
+      await refreshRequest;
+      return await request(value);
+    } finally { endingSession = false; }
+  }
+  const ended = () => (context.getState?.() as { auth?: { sessionEnded: boolean } })?.auth?.sessionEnded;
+  if (ended()) return { error: { status: 401 } };
   const result = await request(value);
   if (result.error?.status !== 401) return result;
-  if (!(await refreshSession())) return result;
+  if (ended() || !(await refreshSession()) || ended()) return result;
   return request(value);
 };
 
@@ -51,6 +65,8 @@ export const api = createApi({
   endpoints: build => ({
     setupStatus: build.query<SetupStatus, void>({ query: () => '/setup/status' }),
     session: build.query<{ user: User }, void>({ query: () => '/auth/me' }),
+    logout: build.mutation<void, void>({ query: () => ({ url: '/auth/logout', method: 'POST' }) }),
+    switchAccount: build.mutation<void, void>({ query: () => ({ url: '/auth/switch-account', method: 'POST' }) }),
     overview: build.query<Overview, void>({ query: () => '/overview', providesTags: ['Overview'] }),
     symbols: build.query<{ symbols: SymbolSnapshot[] }, void>({ query: () => '/symbols', providesTags: ['Symbols'] }),
     symbol: build.query<SymbolSnapshot, string>({ query: symbol => `/symbols/${symbol}`, providesTags: ['Symbols'] }),
@@ -73,4 +89,4 @@ export const api = createApi({
   }),
 });
 
-export const { useSetupStatusQuery, useSessionQuery, useOverviewQuery, useSymbolsQuery, useSymbolQuery, useAssetSearchQuery, useWatchlistQuery, useAddWatchlistSymbolMutation, useRemoveWatchlistSymbolMutation, useUsersQuery, useUpdateUserRoleMutation, useMetricsQuery, useAlertsQuery, useAcknowledgeAlertMutation, useRulesQuery, useRuleVersionsQuery, useCreateRuleMutation, useUpdateRuleMutation, useToggleRuleMutation, useRollbackRuleMutation, useAuditQuery } = api;
+export const { useSetupStatusQuery, useSessionQuery, useLogoutMutation, useSwitchAccountMutation, useOverviewQuery, useSymbolsQuery, useSymbolQuery, useAssetSearchQuery, useWatchlistQuery, useAddWatchlistSymbolMutation, useRemoveWatchlistSymbolMutation, useUsersQuery, useUpdateUserRoleMutation, useMetricsQuery, useAlertsQuery, useAcknowledgeAlertMutation, useRulesQuery, useRuleVersionsQuery, useCreateRuleMutation, useUpdateRuleMutation, useToggleRuleMutation, useRollbackRuleMutation, useAuditQuery } = api;

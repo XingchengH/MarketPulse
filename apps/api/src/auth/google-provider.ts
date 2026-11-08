@@ -8,7 +8,7 @@ export interface GoogleProfile {
 }
 
 export interface GoogleIdentityProvider {
-  authorizationUrl(state: string): string;
+  authorizationUrl(state: string, options?: { selectAccount?: boolean }): string;
   exchange(code: string): Promise<GoogleProfile>;
 }
 
@@ -27,12 +27,14 @@ export function parseGoogleProfile(value: unknown): GoogleProfile {
 export function createGoogleIdentityProvider(clientId: string, clientSecret: string, redirectUri: string): GoogleIdentityProvider {
   const client = new OAuth2Client(clientId, clientSecret, redirectUri);
   return {
-    authorizationUrl(state) {
-      return client.createAuthorizationURL(
+    authorizationUrl(state, options) {
+      const url = client.createAuthorizationURL(
         'https://accounts.google.com/o/oauth2/v2/auth',
         state,
         ['openid', 'email', 'profile'],
-      ).toString();
+      );
+      if (options?.selectAccount === true) url.searchParams.set('prompt', 'select_account');
+      return url.toString();
     },
     async exchange(code) {
       const tokens = await client.validateAuthorizationCode('https://oauth2.googleapis.com/token', code, null);
