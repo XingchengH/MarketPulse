@@ -18,8 +18,10 @@ import { createAlertsRouter } from './routes/alerts.js';
 import { createAuditRouter } from './routes/audit.js';
 import { RuleService } from './monitoring/rule-service.js';
 import { AlertService } from './monitoring/alert-service.js';
-import { createWatchlistRouter } from './routes/watchlist.js';
+import { createWatchlistRouter, emptyWatchlistScope, type AssetLookup, type PersonalWatchlistApi } from './routes/watchlist.js';
 import type { WatchlistService } from './monitoring/watchlist-service.js';
+import type { AssetDirectory } from './market-data/asset-directory.js';
+import { createAssetsRouter } from './routes/assets.js';
 import type { ProviderState } from '@marketpulse/contracts';
 import type { ConfigurationReadiness } from './routes/setup.js';
 
@@ -35,7 +37,11 @@ export interface AppDependencies {
     tokens?: TokenService;
   };
   marketData?: MarketDataApi;
-  monitoring?: { rules?: RuleService; alerts?: AlertService; watchlist?: WatchlistService };
+  assetDirectory?: Pick<AssetDirectory, 'search'>;
+  assetLookup?: AssetLookup;
+  // Legacy watchlists are accepted only while server wiring migrates. They are
+  // never used as a source of personal membership or mounted as private APIs.
+  monitoring?: { rules?: RuleService; alerts?: AlertService; watchlist?: PersonalWatchlistApi | WatchlistService };
   staticDir?: string;
 }
 
@@ -62,12 +68,16 @@ export function createApp(dependencies: AppDependencies): Express {
       webOrigin: dependencies.config.webOrigin,
     }));
     const resolveRole = async (id: string) => (await dependencies.auth!.repository.findUserById(id))?.role ?? null;
+    const configuredWatchlist = dependencies.monitoring?.watchlist;
+    const personalWatchlist = configuredWatchlist && 'symbols' in configuredWatchlist ? configuredWatchlist : undefined;
+    const scope = personalWatchlist ?? emptyWatchlistScope;
     app.use('/api/admin/users', requireUser(tokens), createAdminUsersRouter(dependencies.auth.repository));
-    if (dependencies.marketData) app.use('/api', requireUser(tokens), createMarketDataRouter(dependencies.marketData));
+    if (dependencies.assetDirectory) app.use('/api/assets', requireUser(tokens), createAssetsRouter(dependencies.assetDirectory, scope));
+    if (dependencies.marketData) app.use('/api', requireUser(tokens), createMarketDataRouter(dependencies.marketData, scope));
     if (dependencies.monitoring) {
-      if (dependencies.monitoring.watchlist) app.use('/api/watchlist', requireUser(tokens), createWatchlistRouter(dependencies.monitoring.watchlist, resolveRole));
+      if (personalWatchlist) app.use('/api/watchlist', requireUser(tokens), createWatchlistRouter(personalWatchlist, dependencies.assetLookup ?? { lookupAsset: async () => { throw new Error('Asset lookup is not configured'); } }));
       app.use('/api/rules', requireUser(tokens), createRulesRouter(dependencies.monitoring.rules ?? new RuleService(), resolveRole));
-      app.use('/api/alerts', requireUser(tokens), createAlertsRouter(resolveRole, dependencies.monitoring.alerts));
+      app.use('/api/alerts', requireUser(tokens), createAlertsRouter(resolveRole, dependencies.monitoring.alerts, scope));
       app.use('/api/audit', requireUser(tokens), createAuditRouter(resolveRole));
     }
   }
