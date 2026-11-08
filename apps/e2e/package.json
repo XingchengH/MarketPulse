@@ -3,6 +3,12 @@
   "private": true,
   "version": "0.1.0",
   "type": "module",
-  "scripts": { "test": "node scripts/run-playwright.mjs", "typecheck": "tsc --noEmit", "build": "tsc --noEmit" },
+  "scripts": {
+    "test": "pnpm test:cleanup && node scripts/run-playwright.mjs",
+    "test:cleanup": "node --experimental-strip-types --test scripts/cleanup.test.mjs",
+    "smoke:container": "node --experimental-strip-types scripts/container-smoke.mjs",
+    "typecheck": "tsc --noEmit",
+    "build": "tsc --noEmit"
+  },
   "devDependencies": { "@playwright/test": "^1.56.1", "@types/node": "^24.10.0", "mongodb-memory-server": "^10.3.0", "mongoose": "^9.0.0", "typescript": "~5.8.3" }
 }

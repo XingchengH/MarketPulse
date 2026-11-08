@@ -12,18 +12,18 @@ All commands below exited 0:
 | --- | --- |
 | `CI=true pnpm install --frozen-lockfile` | Frozen lockfile accepted; 401 packages restored without changing dependency versions. |
 | `CI=true pnpm test` | **269 tests passed**: 9 contracts, 204 API, 56 web; 42 test files. |
-| `CI=true pnpm --filter @marketpulse/e2e test` | **2 integrated Playwright tests passed**, using one worker. |
+| `CI=true pnpm --filter @marketpulse/e2e test` | **4 cleanup-helper tests and 2 integrated Playwright tests passed**, using one browser worker. |
 | `CI=true pnpm typecheck` | Contracts, API, web, and E2E passed. |
 | `CI=true pnpm build` | Contracts, API, web production bundle, and E2E passed. |
 | `docker compose config --quiet` | Compose configuration validated. |
 | `docker build -f apps/api/Dockerfile -t marketpulse-personal-watchlist-verification:2026-11-07 .` | API image built. |
 | `docker build -t marketpulse-personal-watchlist-preview-verification:2026-11-07 .` | Complete same-origin preview image built. |
-| `node /private/tmp/marketpulse-container-smoke-2026-11-07.mjs` | Disposable production-image smoke passed; details below. The script is a local verification artifact, not an application entry point. |
+| `CI=true pnpm --filter @marketpulse/e2e smoke:container` | Tracked disposable production-image smoke passed; details and prerequisites below. |
 | `git diff --check` | No whitespace errors. |
 
 The sandbox initially blocked registry resolution and loopback binding (`ENOTFOUND` / `listen EPERM: operation not permitted 127.0.0.1`). Dependency installation and tests requiring local servers were rerun with the required sandbox escalation. Docker also required daemon-socket access. These were environment restrictions, not weakened or skipped checks.
 
-The new two-user test was first run before harness implementation: the original smoke passed and the new test failed with `TypeError: harness.selectIdentity is not a function`. After implementing the harness, both passed. The final run includes explicit forbidden-room checks and removal-room checks. Readiness uses bounded polling for authenticated WebSocket upgrade and symbol memberships; browser assertions wait for rendered/API results. The old fixed sleep and duplicate trade emission were removed. Browser contexts, HTTP/Socket.IO servers, provider, Mongoose connection, and Mongo replica set are closed after each scenario.
+The new two-user test was first run before harness implementation: the original smoke passed and the new test failed with `TypeError: harness.selectIdentity is not a function`. After implementing the harness, both passed. The final run includes explicit forbidden-room checks and removal-room checks. Readiness uses bounded polling for authenticated WebSocket upgrade and symbol memberships; browser assertions wait for rendered/API results. The old fixed sleep and duplicate trade emission were removed. Browser contexts, HTTP/Socket.IO servers, provider, Mongoose connection, and Mongo replica set are closed after each scenario. The cleanup stack attempts every registered resource in reverse order: sole teardown failures throw an `AggregateError`; when startup/test assertions already failed, teardown errors are reported with the original error as their cause while the original failure is retained. Four helper tests verify ordering/idempotence, multiple failures, original-failure preservation, and clean teardown.
 
 ## Controlled browser coverage
 
@@ -36,7 +36,7 @@ The browser scenarios verify:
 - Admin OAuth login, a controlled AAPL trade displaying 40 ms observed latency, alert acknowledgement, and persisted acknowledgement after reload.
 - Independent Alpha/Beta logins with different user IDs and AAPL present in both starter lists.
 - Company-name search for Advanced Micro Devices and ticker search for GOOG; UI addition of AMD to Alpha and GOOG to Beta. Both symbols are deterministic eligible nonstarters.
-- Exactly one initial provider subscription union and one replacement per private-symbol change; AAPL and every other shared starter occur once in each union.
+- Exact provider subscription history at every stage: `[AAPL, AMZN, META, MSFT, NVDA, TSLA]`; then `[AAPL, AMD, AMZN, META, MSFT, NVDA, TSLA]`; then `[AAPL, AMD, AMZN, GOOG, META, MSFT, NVDA, TSLA]`; after AMD removal, `[AAPL, AMZN, GOOG, META, MSFT, NVDA, TSLA]`. Whole-history equality checks reject extra replacements, duplicates, missing starters, and stale private subscriptions.
 - Controlled AAPL/AMD/GOOG events: Alpha renders and receives AAPL + AMD, Beta renders and receives AAPL + GOOG. Raw browser WebSocket frames and server symbol-room membership are checked, including forbidden rooms.
 - Cross-user detail API requests and direct browser navigation to the detail API URL return 404 / `Symbol not found`; cross-user metrics return 404. REST symbol lists exclude the other user's private symbol. The application's visual detail surface is a drawer rather than a separate SPA detail URL.
 - UI confirmation/removal of AMD, absence after reload and authenticated watchlist reread, provider-union removal while GOOG stays subscribed, and revoked AMD room membership.
@@ -46,7 +46,9 @@ The harness replaces `server.ts` bootstrap and minute-bucket writing with a narr
 
 ## Migration and container evidence
 
-The production preview image was run with fake credentials on a new **internal Docker network**, a disposable MongoDB 8 replica set, and a legacy viewer inserted before startup. No host ports or persistent volumes were published, and the network prevented external provider calls. Only those test containers and their network were removed afterward.
+The tracked script is [`apps/e2e/scripts/container-smoke.mjs`](../apps/e2e/scripts/container-smoke.mjs). Prerequisites: Node 22.6 or newer, a running Docker daemon, the preview image built with the root Docker command above, and a local MongoDB image (`docker pull mongo:8` if needed). From the repository root, run `CI=true pnpm --filter @marketpulse/e2e smoke:container`. It verifies prerequisites before creating resources and never loads `.env` or accepts production credentials.
+
+The production preview image was run with literal fake credentials on a new **internal Docker network**, a disposable MongoDB 8 replica set, and a legacy viewer inserted before startup. No host ports were published; MongoDB data/configuration use tmpfs. Unique UUID names and ownership labels restrict cleanup to resources created by that invocation. Containers (including any anonymous volumes) and the network are removed after success or failure; cleanup failures fail an otherwise successful run and are reported alongside an existing failure. The internal network prevents external provider calls.
 
 Observed results: `/health/live` **200**; static SPA `/` **200**; authenticated `/api/watchlist` **200** with six starter entries including AAPL; database `watchlistInitializedAt` present and exactly six owned entries after production bootstrap. `/health/ready` correctly returned **503**, with MongoDB/configuration ready and Alpaca `connecting`; authenticated offline asset search returned **503**, without fabricated search results. This proves startup, migration, static packaging, and honest dependency failure behavior. It does not prove successful container live-provider search or add/remove; those successful controlled flows are covered by the browser suite.
 

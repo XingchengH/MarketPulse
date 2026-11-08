@@ -28,6 +28,7 @@ import { RefreshToken } from '../../api/src/models/refresh-token.js';
 import { FakeGoogleIdentityProvider } from '../../api/src/test-helpers/fake-google.js';
 import { FakeMarketDataProvider } from '../../api/src/test-helpers/fake-provider.js';
 import type { ProviderAsset } from '../../api/src/market-data/provider.js';
+import { cleanupAll, type CleanupAction, type ExistingFailure } from './cleanup.js';
 
 const apiPort = Number(process.env.E2E_API_PORT);
 const webOrigin = `http://localhost:${process.env.E2E_WEB_PORT}`;
@@ -53,8 +54,8 @@ class E2eMarketDataProvider extends FakeMarketDataProvider {
 export async function startE2eHarness() {
   if (process.env.NODE_ENV !== 'test') throw new Error('E2E dependency injection is restricted to NODE_ENV=test');
   if (!Number.isInteger(apiPort) || !process.env.E2E_WEB_PORT) throw new Error('Playwright did not allocate E2E ports');
-  const cleanup: Array<() => Promise<void>> = [];
-  const stopAll = async () => { for (const stop of cleanup.splice(0).reverse()) { try { await stop(); } catch { /* preserve the original startup/test failure */ } } };
+  const cleanup: CleanupAction[] = [];
+  const stopAll = (existingFailure?: ExistingFailure) => cleanupAll(cleanup, existingFailure);
   try {
   let systemBinary: string | undefined;
   try { systemBinary = execFileSync('which', ['mongod'], { encoding: 'utf8' }).trim() || undefined; } catch { /* download fallback */ }
@@ -68,6 +69,7 @@ export async function startE2eHarness() {
   await Rule.create({ name: 'E2E latency', scope: { kind: 'all' }, metric: 'observedLatencyMs', operator: 'gt', threshold: 25, durationSeconds: 0, severity: 'warning', enabled: true, version: 1, creatorId: String(admin._id) });
 
   const provider = new E2eMarketDataProvider();
+  cleanup.push(() => provider.disconnect());
   const callbackUrl = `http://localhost:${apiPort}/api/auth/google/callback`;
   const defaultGoogle = new FakeGoogleIdentityProvider(identities.admin, callbackUrl);
   const google = {
@@ -105,7 +107,6 @@ export async function startE2eHarness() {
   });
   await subscriptions.initialize(symbols => provider.connect(symbols));
   subscriptionsStarted = true;
-  cleanup.push(() => provider.disconnect());
 
   const database = { isReady: async () => (await mongoose.connection.db?.admin().ping())?.ok === 1 };
   const config = { nodeEnv: 'test' as const, port: apiPort, webOrigin, mongodbUri: replicaSet.getUri(), google: { clientId: 'fake-client', clientSecret: 'fake-secret', redirectUri: callbackUrl }, alpaca: { apiKey: 'fake-key', apiSecret: 'fake-secret' }, accessTokenSecret: 'e2e-access-secret-at-least-32-characters', refreshTokenPepper: 'e2e-refresh-pepper-at-least-32-characters' };
@@ -122,7 +123,12 @@ export async function startE2eHarness() {
   const socketErrors: string[] = [];
   realtime.engine.on('connection_error', error => socketErrors.push(`${error.code}:${error.message}:${JSON.stringify(error.context)}`));
   publisher = new RealtimePublisher(realtime, { intervalMs: 10 });
-  cleanup.push(async () => { monitoring.stop(); publisher?.close(); await new Promise<void>(resolve => socketServer.close(() => resolve())); if (httpServer.listening) await new Promise<void>(resolve => httpServer.close(() => resolve())); });
+  cleanup.push(async () => {
+    if (httpServer.listening) await new Promise<void>((resolve, reject) => httpServer.close(error => error ? reject(error) : resolve()));
+  });
+  cleanup.push(() => new Promise<void>((resolve, reject) => socketServer.close(error => error ? reject(error) : resolve())));
+  cleanup.push(() => publisher?.close());
+  cleanup.push(() => monitoring.stop());
   await new Promise<void>((resolve, reject) => { httpServer.once('error', reject); httpServer.listen(apiPort, '127.0.0.1', resolve); });
 
   const selectedIdentities = new WeakMap<BrowserContext, Identity>();
@@ -155,5 +161,5 @@ export async function startE2eHarness() {
     },
     stop: stopAll,
   };
-  } catch (error) { await stopAll(); throw error; }
+  } catch (error) { await stopAll({ error }); throw error; }
 }

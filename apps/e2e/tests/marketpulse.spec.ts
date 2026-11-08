@@ -1,8 +1,15 @@
 import { expect, test, type BrowserContext, type Page } from '@playwright/test';
 import { startE2eHarness } from './harness.js';
+import { cleanupAll, type ExistingFailure } from './cleanup.js';
+
+const starterUnion = ['AAPL', 'AMZN', 'META', 'MSFT', 'NVDA', 'TSLA'];
+const amdUnion = ['AAPL', 'AMD', 'AMZN', 'META', 'MSFT', 'NVDA', 'TSLA'];
+const bothPrivateUnion = ['AAPL', 'AMD', 'AMZN', 'GOOG', 'META', 'MSFT', 'NVDA', 'TSLA'];
+const googUnion = ['AAPL', 'AMZN', 'GOOG', 'META', 'MSFT', 'NVDA', 'TSLA'];
 
 test('real stack logs in an admin, streams IEX data, and persists acknowledgement', async ({ page }) => {
   const harness = await startE2eHarness();
+  let failure: ExistingFailure | undefined;
   try {
     await page.goto('/');
     await page.getByRole('link', { name: 'Continue with Google' }).click();
@@ -21,15 +28,18 @@ test('real stack logs in an admin, streams IEX data, and persists acknowledgemen
     await expect(page.getByText(/Acknowledged by/)).toBeVisible();
     await page.reload();
     await expect(page.getByText(/Acknowledged by/)).toBeVisible();
+  } catch (error) {
+    failure = { error };
+    throw error;
   } finally {
-    await page.close();
-    await harness.stop();
+    await cleanupAll([() => harness.stop(), () => page.close()], failure);
   }
 });
 
 test('independent Google sessions keep personal watchlists and realtime delivery private', async ({ browser, baseURL }) => {
   const harness = await startE2eHarness();
   const contexts: BrowserContext[] = [];
+  let failure: ExistingFailure | undefined;
   try {
     const contextA = await browser.newContext({ baseURL });
     contexts.push(contextA);
@@ -57,18 +67,18 @@ test('independent Google sessions keep personal watchlists and realtime delivery
     const sessionA = await (await contextA!.request.get('/api/auth/me')).json();
     const sessionB = await (await contextB!.request.get('/api/auth/me')).json();
     expect(sessionA.user.id).not.toBe(sessionB.user.id);
+    expect(harness.subscriptionHistory).toEqual([starterUnion]);
 
     await userA!.getByRole('searchbox', { name: 'Search stocks or companies' }).fill('Advanced Micro');
     await userA!.getByRole('button', { name: 'Add AMD', exact: true }).click();
     await expect(userA!.getByRole('button', { name: 'AMD', exact: true })).toBeVisible();
+    expect(harness.subscriptionHistory).toEqual([starterUnion, amdUnion]);
     await userB!.getByRole('searchbox', { name: 'Search stocks or companies' }).fill('GOOG');
     await userB!.getByRole('button', { name: 'Add GOOG', exact: true }).click();
     await expect(userB!.getByRole('button', { name: 'GOOG', exact: true })).toBeVisible();
     await harness.waitForSocket('userA', ['AAPL', 'AMD'], ['GOOG']);
     await harness.waitForSocket('userB', ['AAPL', 'GOOG'], ['AMD']);
-    expect(harness.subscriptionHistory.at(-1)).toEqual(['AAPL', 'AMD', 'AMZN', 'GOOG', 'META', 'MSFT', 'NVDA', 'TSLA']);
-    expect(harness.subscriptionHistory).toHaveLength(3); // One initial union and two private-symbol changes.
-    for (const symbols of harness.subscriptionHistory) expect(new Set(symbols).size).toBe(symbols.length);
+    expect(harness.subscriptionHistory).toEqual([starterUnion, amdUnion, bothPrivateUnion]);
 
     for (const [symbol, price] of [['AAPL', 201.5], ['AMD', 155.25], ['GOOG', 180.75]] as const) {
       const received = Date.now();
@@ -102,9 +112,7 @@ test('independent Google sessions keep personal watchlists and realtime delivery
     await expect(userA!.getByRole('button', { name: 'AMD', exact: true })).toHaveCount(0);
     const persisted = await (await contextA!.request.get('/api/watchlist')).json();
     expect(persisted.watchlist.entries.map((entry: { symbol: string }) => entry.symbol)).not.toContain('AMD');
-    expect(harness.subscriptionHistory.at(-1)).not.toContain('AMD');
-    expect(harness.subscriptionHistory.at(-1)).toContain('GOOG');
-    expect(harness.subscriptionHistory).toHaveLength(4);
+    expect(harness.subscriptionHistory).toEqual([starterUnion, amdUnion, bothPrivateUnion, googUnion]);
     await harness.waitForSocket('userA', ['AAPL'], ['AMD', 'GOOG']);
 
     await userA!.getByRole('button', { name: 'Account menu for User Alpha' }).click();
@@ -124,8 +132,10 @@ test('independent Google sessions keep personal watchlists and realtime delivery
     await expect(userB!.getByRole('button', { name: 'AAPL', exact: true })).toBeVisible();
     await expect(userB!.getByRole('button', { name: 'GOOG', exact: true })).toHaveCount(0);
     await expect(userB!.getByRole('button', { name: 'AMD', exact: true })).toHaveCount(0);
+  } catch (error) {
+    failure = { error };
+    throw error;
   } finally {
-    try { await Promise.all(contexts.map(context => context.close())); }
-    finally { await harness.stop(); }
+    await cleanupAll([() => harness.stop(), ...contexts.map(context => () => context.close())], failure);
   }
 });
