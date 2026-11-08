@@ -10,7 +10,9 @@ import { MonitoringEvaluator } from '../../api/src/monitoring/evaluator.js';
 import { AlertService } from '../../api/src/monitoring/alert-service.js';
 import { MonitoringRuntime } from '../../api/src/monitoring/runtime.js';
 import { RuleService } from '../../api/src/monitoring/rule-service.js';
-import { WatchlistService, mongooseWatchlistRepository } from '../../api/src/monitoring/watchlist-service.js';
+import { PersonalWatchlistService } from '../../api/src/monitoring/personal-watchlist-service.js';
+import { SubscriptionCoordinator } from '../../api/src/monitoring/subscription-coordinator.js';
+import { AssetDirectory } from '../../api/src/market-data/asset-directory.js';
 import { createRealtimeServer } from '../../api/src/realtime/socket-server.js';
 import { RealtimePublisher } from '../../api/src/realtime/publisher.js';
 import { MetricBucket } from '../../api/src/models/metric-bucket.js';
@@ -19,7 +21,9 @@ import { Rule } from '../../api/src/models/rule.js';
 import { RuleVersion } from '../../api/src/models/rule-version.js';
 import { Alert } from '../../api/src/models/alert.js';
 import { AuditEvent } from '../../api/src/models/audit-event.js';
-import { Watchlist } from '../../api/src/models/watchlist.js';
+import { UserWatchlistEntry } from '../../api/src/models/user-watchlist-entry.js';
+import { AuthInvariant } from '../../api/src/models/auth-invariant.js';
+import { RefreshToken } from '../../api/src/models/refresh-token.js';
 import { FakeGoogleIdentityProvider } from '../../api/src/test-helpers/fake-google.js';
 import { FakeMarketDataProvider } from '../../api/src/test-helpers/fake-provider.js';
 
@@ -38,40 +42,44 @@ export async function startE2eHarness() {
   cleanup.push(() => replicaSet.stop().then(() => undefined));
   await mongoose.connect(replicaSet.getUri(), { dbName: 'marketpulse-e2e' });
   cleanup.push(() => mongoose.disconnect());
-  await Promise.all([User.syncIndexes(), Rule.syncIndexes(), RuleVersion.syncIndexes(), Alert.syncIndexes(), AuditEvent.syncIndexes(), Watchlist.syncIndexes(), MetricBucket.syncIndexes()]);
+  await Promise.all([User.syncIndexes(), UserWatchlistEntry.syncIndexes(), AuthInvariant.syncIndexes(), RefreshToken.syncIndexes(), Rule.syncIndexes(), RuleVersion.syncIndexes(), Alert.syncIndexes(), AuditEvent.syncIndexes(), MetricBucket.syncIndexes()]);
 
   const admin = await User.create({ googleSubject: 'e2e-admin', email: 'admin@example.test', name: 'Test Admin', role: 'admin' });
-  await Watchlist.create({ symbol: 'AAPL', enabled: true });
   await Rule.create({ name: 'E2E latency', scope: { kind: 'all' }, metric: 'observedLatencyMs', operator: 'gt', threshold: 25, durationSeconds: 0, severity: 'warning', enabled: true, version: 1, creatorId: String(admin._id) });
 
   const provider = new FakeMarketDataProvider();
   const callbackUrl = `http://localhost:${apiPort}/api/auth/google/callback`;
   const google = new FakeGoogleIdentityProvider({ subject: 'e2e-admin', email: 'admin@example.test', name: 'Test Admin' }, callbackUrl);
-  const repository = new MongooseAuthRepository();
+  let subscriptionsStarted = false;
+  const watchlistService = new PersonalWatchlistService(async () => { if (subscriptionsStarted) await subscriptions.refresh(); });
+  const subscriptions = new SubscriptionCoordinator(watchlistService, provider);
+  const assetDirectory = new AssetDirectory(provider);
+  await watchlistService.initializeUser(String(admin._id));
+  const repository = new MongooseAuthRepository(userId => watchlistService.initializeUser(userId));
   const tokens = createTokenService('e2e-access-secret-at-least-32-characters', 'e2e-refresh-pepper-at-least-32-characters');
   const aggregator = new MarketDataAggregator({ marketClock: { get: () => provider.getMarketClock() } });
   let publisher: RealtimePublisher | undefined;
   const alertService = new AlertService(() => publisher?.alertsChanged());
-  const monitoring = new MonitoringRuntime({ snapshot: symbol => aggregator.snapshotWithMarketState(symbol), symbols: () => ['AAPL'] }, new MonitoringEvaluator(alertService), undefined, { cadenceMs: 1, onError: error => { throw error; } });
+  const monitoring = new MonitoringRuntime({ snapshot: symbol => aggregator.snapshotWithMarketState(symbol), symbols: () => subscriptions.symbols() }, new MonitoringEvaluator(alertService), undefined, { cadenceMs: 1, onError: error => { throw error; } });
   const ruleService = new RuleService(() => publisher?.rulesChanged());
-  const watchlistService = new WatchlistService(mongooseWatchlistRepository, provider, () => undefined);
   provider.onEvent(event => {
     aggregator.ingest(event);
     void aggregator.snapshotWithMarketState(event.symbol).then(snapshot => publisher?.symbols([snapshot]));
     void monitoring.observe(event.symbol);
   });
-  await provider.connect(['AAPL']);
+  await subscriptions.initialize(symbols => provider.connect(symbols));
+  subscriptionsStarted = true;
   cleanup.push(() => provider.disconnect());
 
   const database = { isReady: async () => (await mongoose.connection.db?.admin().ping())?.ok === 1 };
   const config = { nodeEnv: 'test' as const, port: apiPort, webOrigin, mongodbUri: replicaSet.getUri(), google: { clientId: 'fake-client', clientSecret: 'fake-secret', redirectUri: callbackUrl }, alpaca: { apiKey: 'fake-key', apiSecret: 'fake-secret' }, accessTokenSecret: 'e2e-access-secret-at-least-32-characters', refreshTokenPepper: 'e2e-refresh-pepper-at-least-32-characters' };
   const marketData = {
-    overview: async () => ({ provider: provider.name, providerState: provider.state(), symbols: ['AAPL'] }),
-    symbols: async () => [await aggregator.snapshotWithMarketState('AAPL')],
-    symbol: async (symbol: string) => symbol === 'AAPL' ? aggregator.snapshotWithMarketState(symbol) : null,
+    overview: async () => ({ provider: provider.name, providerState: provider.state(), symbols: subscriptions.symbols() }),
+    symbols: async () => Promise.all(subscriptions.symbols().map(symbol => aggregator.snapshotWithMarketState(symbol))),
+    symbol: async (symbol: string) => subscriptions.symbols().includes(symbol) ? aggregator.snapshotWithMarketState(symbol) : null,
     metrics: async () => [],
   };
-  const app = createApp({ config, database, providerState: () => provider.state(), auth: { provider: google, repository, tokens }, marketData, monitoring: { rules: ruleService, alerts: alertService, watchlist: watchlistService } });
+  const app = createApp({ config, database, providerState: () => provider.state(), auth: { provider: google, repository, tokens }, marketData, assetDirectory, assetLookup: assetDirectory, monitoring: { rules: ruleService, alerts: alertService, watchlist: watchlistService } });
   const httpServer: Server = createServer(app);
   const realtime = createRealtimeServer(httpServer, { tokens, findCurrentUser: id => repository.findUserById(id) });
   const socketErrors: string[] = [];

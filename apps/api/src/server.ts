@@ -9,7 +9,11 @@ import { MongooseAuthRepository } from './auth/mongoose-repository.js';
 import { AlpacaProvider } from './market-data/alpaca-provider.js';
 import { MarketDataAggregator } from './market-data/aggregator.js';
 import { MetricBucket, upsertMinuteBucket } from './models/metric-bucket.js';
-import { bootstrapDefaultWatchlist, Watchlist } from './models/watchlist.js';
+import { User } from './models/user.js';
+import { UserWatchlistEntry } from './models/user-watchlist-entry.js';
+import { AuthInvariant } from './models/auth-invariant.js';
+import { AuditEvent } from './models/audit-event.js';
+import { RefreshToken } from './models/refresh-token.js';
 import { MinuteMetricWriter } from './market-data/minute-writer.js';
 import { MonitoringEvaluator } from './monitoring/evaluator.js';
 import { AlertService } from './monitoring/alert-service.js';
@@ -18,14 +22,18 @@ import { RuleService } from './monitoring/rule-service.js';
 import { createTokenService } from './auth/tokens.js';
 import { createRealtimeServer } from './realtime/socket-server.js';
 import { RealtimePublisher } from './realtime/publisher.js';
-import { WatchlistService, mongooseWatchlistRepository } from './monitoring/watchlist-service.js';
+import { PersonalWatchlistService } from './monitoring/personal-watchlist-service.js';
+import { SubscriptionCoordinator } from './monitoring/subscription-coordinator.js';
+import { AssetDirectory } from './market-data/asset-directory.js';
 import { BootstrapAttempt } from './bootstrap-attempt.js';
+import { bootstrapPersonalWatchlists } from './bootstrap-personal-watchlists.js';
 
 const config = loadConfig();
 const staticDir = config.nodeEnv === 'production' ? fileURLToPath(new URL('../../web/dist', import.meta.url)) : undefined;
 const database = connectDatabase(config.mongodbUri);
 const marketProvider = new AlpacaProvider({ apiKey: config.alpaca.apiKey, apiSecret: config.alpaca.apiSecret });
-let application = createApp({ config, database, providerState: () => marketProvider.state(), staticDir });
+let servicesReady = false;
+let application = createApp({ config, database, providerState: () => marketProvider.state(), servicesReady: () => servicesReady, staticDir });
 const server = createServer((request, response) => application(request, response));
 let shutdown: ((signal: string) => Promise<void>) | undefined;
 let initializing = false;
@@ -40,50 +48,70 @@ async function initialize(): Promise<void> {
   try {
     await database.connect();
     const provider = createGoogleIdentityProvider(config.google.clientId, config.google.clientSecret, config.google.redirectUri);
-    const repository = new MongooseAuthRepository();
     const tokens = createTokenService(config.accessTokenSecret, config.refreshTokenPepper);
     const aggregator = new MarketDataAggregator({ marketClock: { get: () => marketProvider.getMarketClock() } });
     let publisher: RealtimePublisher | undefined;
     const alertService = new AlertService(() => publisher?.alertsChanged());
     const ruleService = new RuleService(() => publisher?.rulesChanged());
-    let subscribedSymbols: string[] = [];
+    let subscriptionsStarted = false;
+    const refreshSubscriptions = async () => {
+      try {
+        await subscriptions.refresh();
+        publisher?.providerState(providerState());
+        publisher?.overview({ provider: marketProvider.name, providerState: providerState(), symbols: subscriptions.symbols() });
+      } catch {
+        // Persistence already committed. Keep it authoritative and advertise the
+        // degraded subscription state until a subsequent refresh succeeds.
+        publisher?.providerState('unavailable');
+        console.error({ component: 'subscriptions' }, 'Market subscription refresh failed');
+      }
+    };
+    const watchlistService = new PersonalWatchlistService(async () => {
+      if (subscriptionsStarted) await refreshSubscriptions();
+    });
+    const subscriptions = new SubscriptionCoordinator(watchlistService, marketProvider);
+    const providerState = () => subscriptions.isHealthy() ? marketProvider.state() : 'unavailable' as const;
+    const assetDirectory = new AssetDirectory(marketProvider);
+    const repository = new MongooseAuthRepository(async userId => {
+      await watchlistService.initializeUser(userId);
+      if (!subscriptions.isHealthy()) await refreshSubscriptions();
+    });
     const monitoring = new MonitoringRuntime(
-      { snapshot: symbol => aggregator.snapshotWithMarketState(symbol), symbols: () => subscribedSymbols },
+      { snapshot: symbol => aggregator.snapshotWithMarketState(symbol), symbols: () => subscriptions.symbols() },
       new MonitoringEvaluator(alertService), undefined,
       { onError: error => console.error({ component: 'monitoring', error }, 'Monitoring evaluation failure') },
     );
     const minuteWriter = new MinuteMetricWriter(upsertMinuteBucket, { onFailure: error => {
-      aggregator.recordProviderError(subscribedSymbols);
+      aggregator.recordProviderError(subscriptions.symbols());
       console.error({ component: 'minute-metric-writer', message: error.message }, 'Market metric persistence failure');
     } });
-    await bootstrapDefaultWatchlist();
-    const symbols = (await Watchlist.find({ enabled: true }).select('symbol').lean()) as Array<{ symbol: string }>;
-    subscribedSymbols = symbols.map(item => item.symbol);
-    const watchlistService = new WatchlistService(mongooseWatchlistRepository, marketProvider, next => {
-      subscribedSymbols = next;
-      publisher?.overview({ provider: marketProvider.name, providerState: marketProvider.state(), symbols: next });
+    await bootstrapPersonalWatchlists({
+      ensureIndexes: async () => { await Promise.all([User, UserWatchlistEntry, AuthInvariant, AuditEvent, RefreshToken].map(model => model.createIndexes())); },
+      usersMissingInitialization: async (after, limit) => {
+        const users = await User.find({ watchlistInitializedAt: null, ...(after ? { _id: { $gt: after } } : {}) }).select('_id').sort({ _id: 1 }).limit(limit).lean();
+        return users.map(user => String(user._id));
+      },
+      initializeUser: userId => watchlistService.initializeUser(userId),
+      coordinator: subscriptions, provider: marketProvider, attempt,
     });
+    subscriptionsStarted = true;
     const marketData = {
-      overview: async () => ({ provider: marketProvider.name, providerState: marketProvider.state(), symbols: subscribedSymbols }),
-      symbols: async () => Promise.all(subscribedSymbols.map(symbol => aggregator.snapshotWithMarketState(symbol))),
-      symbol: async (symbol: string) => subscribedSymbols.includes(symbol) ? aggregator.snapshotWithMarketState(symbol) : null,
+      overview: async () => ({ provider: marketProvider.name, providerState: providerState(), symbols: subscriptions.symbols() }),
+      symbols: async () => Promise.all(subscriptions.symbols().map(symbol => aggregator.snapshotWithMarketState(symbol))),
+      symbol: async (symbol: string) => subscriptions.symbols().includes(symbol) ? aggregator.snapshotWithMarketState(symbol) : null,
       metrics: async ({ symbol, from, to }: { symbol: string; from: Date; to: Date }) => MetricBucket.find({ symbol, bucketStart: { $gte: from, $lte: to } }).sort({ bucketStart: 1 }).lean(),
     };
-    if (config.alpaca.apiKey && config.alpaca.apiSecret) {
-      await marketProvider.connect(subscribedSymbols);
-      attempt.defer(() => marketProvider.disconnect());
-    }
     const unsubscribeEvents = marketProvider.onEvent(event => {
       aggregator.ingest(event);
-      publisher?.requestSnapshots({ provider: marketProvider.name, providerState: marketProvider.state(), symbols: subscribedSymbols, snapshot: symbol => aggregator.snapshotWithMarketState(symbol) });
+      publisher?.requestSnapshots({ provider: marketProvider.name, providerState: providerState(), symbols: subscriptions.symbols(), snapshot: symbol => aggregator.snapshotWithMarketState(symbol) });
       minuteWriter.ingest(event);
       void monitoring.observe(event.symbol).catch(error => console.error({ component: 'monitoring', error }, 'Monitoring evaluation failure'));
     });
     attempt.defer(() => { unsubscribeEvents(); });
     const unsubscribeOperational = marketProvider.onOperationalEvent(event => {
-      if (event.type === 'state') publisher?.providerState(event.state);
-      if (event.type === 'error') { aggregator.recordProviderError(subscribedSymbols); minuteWriter.record('providerErrors', subscribedSymbols); }
-      if (event.type === 'reconnect') { aggregator.recordReconnect(subscribedSymbols); minuteWriter.record('reconnects', subscribedSymbols); }
+      if (event.type === 'state') publisher?.providerState(providerState());
+      if (event.type === 'error') { aggregator.recordProviderError(subscriptions.symbols()); minuteWriter.record('providerErrors', subscriptions.symbols()); }
+      if (event.type === 'reconnect') { aggregator.recordReconnect(subscriptions.symbols()); minuteWriter.record('reconnects', subscriptions.symbols()); }
       void monitoring.tick();
     });
     attempt.defer(() => { unsubscribeOperational(); });
@@ -91,17 +119,19 @@ async function initialize(): Promise<void> {
     attempt.defer(() => minuteWriter.stop());
     monitoring.start();
     attempt.defer(() => monitoring.stop());
-    const fullApplication = createApp({ config, database, providerState: () => marketProvider.state(), auth: { provider, repository, tokens }, marketData, monitoring: { rules: ruleService, alerts: alertService, watchlist: watchlistService }, staticDir });
+    const fullApplication = createApp({ config, database, providerState, servicesReady: () => servicesReady, auth: { provider, repository, tokens }, marketData, assetDirectory, assetLookup: assetDirectory, monitoring: { rules: ruleService, alerts: alertService, watchlist: watchlistService }, staticDir });
     // Socket.IO is attached only after every fallible bootstrap step above has succeeded.
     const realtime = createRealtimeServer(server, { tokens, findCurrentUser: id => repository.findUserById(id), webOrigin: config.webOrigin });
     publisher = new RealtimePublisher(realtime);
     shutdown = createGracefulShutdown({ server, socket: { close: () => new Promise<void>(resolve => realtime.close(() => resolve())) }, provider: marketProvider, monitoring: { stop: () => { monitoring.stop(); publisher?.close(); } }, metrics: { flush: () => minuteWriter.stop() }, database });
     application = fullApplication;
+    servicesReady = true;
     attempt.commit();
-    try { publisher.overview({ provider: marketProvider.name, providerState: marketProvider.state(), symbols: subscribedSymbols }); }
+    try { publisher.overview({ provider: marketProvider.name, providerState: providerState(), symbols: subscriptions.symbols() }); }
     catch (error) { console.error({ component: 'realtime', error }, 'Initial overview publication failed'); }
     console.log('Database connected; application services started');
   } catch (error) {
+    servicesReady = false;
     await attempt.rollback();
     console.error({ component: 'bootstrap', error }, 'Application initialization failed; retrying');
     if (!stopped) setTimeout(() => { initializing = false; void initialize(); }, 2_000).unref();

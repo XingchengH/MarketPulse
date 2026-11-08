@@ -52,6 +52,13 @@ export class AssetDirectory {
       .map(({ asset }) => asset);
   }
 
+  async lookupAsset(symbol: string): Promise<AssetSearchResult | null> {
+    const normalized = symbol.trim().toUpperCase();
+    const directory = await this.getDirectory();
+    const asset = directory.assets.find(asset => asset.symbol === normalized);
+    return asset ? { ...asset } : null;
+  }
+
   private rank(asset: AssetSearchResult, query: string): number | null {
     const symbol = asset.symbol.toLowerCase();
     const companyName = asset.companyName.toLowerCase();

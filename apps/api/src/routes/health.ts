@@ -9,9 +9,10 @@ export interface HealthDependencies {
   config: AppConfig;
   providerState?: () => ProviderState;
   readiness?: ConfigurationReadiness;
+  servicesReady?: () => boolean;
 }
 
-export function createHealthRouter({ database, config, providerState, readiness = {} }: HealthDependencies): Router {
+export function createHealthRouter({ database, config, providerState, readiness = {}, servicesReady = () => true }: HealthDependencies): Router {
   const router = Router();
 
   router.get('/live', (_request, response) => response.json({ status: 'live' }));
@@ -23,7 +24,7 @@ export function createHealthRouter({ database, config, providerState, readiness 
     const configurationReady = googleReady && alpacaReady && tokensReady;
     const state = providerState?.() ?? (alpacaReady ? 'unavailable' : 'unconfigured');
     const providerReady = state === 'connected' || state === 'market_closed' || state === 'outside_session';
-    const ready = mongodbReady && configurationReady && providerReady;
+    const ready = servicesReady() && mongodbReady && configurationReady && providerReady;
     response.status(ready ? 200 : 503).json({
       status: ready ? 'ready' : 'not_ready',
       services: {

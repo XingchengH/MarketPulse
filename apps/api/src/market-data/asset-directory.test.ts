@@ -7,6 +7,17 @@ const asset = (symbol: string, name = 'Example Company', overrides: Partial<Prov
 });
 
 describe('AssetDirectory', () => {
+  it('looks up exact eligible symbols including one-letter tickers with complete metadata', async () => {
+    const directory = new AssetDirectory({ listAssets: async () => [
+      asset('F', 'Ford', { exchange: 'NYSE' }), asset('FA', 'Another'), asset(' app ', ' Apple '),
+      asset('OFF', 'Inactive', { status: 'inactive' }), asset('HALT', 'Halted', { tradable: false }),
+      { ...asset('COIN'), assetClass: 'crypto' } as unknown as ProviderAsset,
+    ] }, { maxResults: 1 });
+    expect(await directory.lookupAsset(' f ')).toEqual({ symbol: 'F', companyName: 'Ford', exchange: 'NYSE', assetClass: 'us_equity', tradable: true });
+    expect(await directory.lookupAsset('app')).toMatchObject({ symbol: 'APP', companyName: 'Apple' });
+    for (const symbol of ['FAKE', 'AP', 'OFF', 'HALT', 'COIN']) expect(await directory.lookupAsset(symbol)).toBeNull();
+  });
+
   it('ranks exact symbol, symbol prefix, company prefix, and company substring with alphabetic ties', async () => {
     const listAssets = vi.fn(async () => [
       asset('ZZZ', 'The Apple Company'), asset('ZX', 'Apple Zebra'), asset('APPZ'),

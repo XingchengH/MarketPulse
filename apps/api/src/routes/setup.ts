@@ -14,6 +14,7 @@ export function createSetupRouter(
   database: Pick<Database, 'isReady'>,
   providerState?: () => ProviderState,
   readiness: ConfigurationReadiness = {},
+  servicesReady: () => boolean = () => true,
 ): Router {
   const router = Router();
 
@@ -30,7 +31,7 @@ export function createSetupRouter(
     } as const;
 
     response.json({
-      configured: services.mongodb === 'ready'
+      configured: servicesReady() && services.mongodb === 'ready'
         && services.googleOAuth === 'ready'
         && services.tokens === 'ready'
         && (services.alpaca === 'connected' || services.alpaca === 'market_closed' || services.alpaca === 'outside_session'),

@@ -19,7 +19,6 @@ import { createAuditRouter } from './routes/audit.js';
 import { RuleService } from './monitoring/rule-service.js';
 import { AlertService } from './monitoring/alert-service.js';
 import { createWatchlistRouter, emptyWatchlistScope, type AssetLookup, type PersonalWatchlistApi } from './routes/watchlist.js';
-import type { WatchlistService } from './monitoring/watchlist-service.js';
 import type { AssetDirectory } from './market-data/asset-directory.js';
 import { createAssetsRouter } from './routes/assets.js';
 import type { ProviderState } from '@marketpulse/contracts';
@@ -30,6 +29,7 @@ export interface AppDependencies {
   database: Pick<Database, 'isReady'>;
   logger?: ErrorLogger;
   providerState?: () => ProviderState;
+  servicesReady?: () => boolean;
   configurationReadiness?: ConfigurationReadiness;
   auth?: {
     provider: GoogleIdentityProvider;
@@ -39,9 +39,7 @@ export interface AppDependencies {
   marketData?: MarketDataApi;
   assetDirectory?: Pick<AssetDirectory, 'search'>;
   assetLookup?: AssetLookup;
-  // Legacy watchlists are accepted only while server wiring migrates. They are
-  // never used as a source of personal membership or mounted as private APIs.
-  monitoring?: { rules?: RuleService; alerts?: AlertService; watchlist?: PersonalWatchlistApi | WatchlistService };
+  monitoring?: { rules?: RuleService; alerts?: AlertService; watchlist?: PersonalWatchlistApi };
   staticDir?: string;
 }
 
@@ -52,11 +50,11 @@ export function createApp(dependencies: AppDependencies): Express {
   app.use(helmet());
   app.use(cors({ origin: dependencies.config.webOrigin, credentials: true }));
   app.use(express.json({ limit: '100kb' }));
-  app.use('/health', createHealthRouter({ database: dependencies.database, config: dependencies.config, providerState: dependencies.providerState, readiness: dependencies.configurationReadiness }));
-  app.use('/api/setup', createSetupRouter(dependencies.config, dependencies.database, dependencies.providerState, dependencies.configurationReadiness));
+  app.use('/health', createHealthRouter({ database: dependencies.database, config: dependencies.config, providerState: dependencies.providerState, readiness: dependencies.configurationReadiness, servicesReady: dependencies.servicesReady }));
+  app.use('/api/setup', createSetupRouter(dependencies.config, dependencies.database, dependencies.providerState, dependencies.configurationReadiness, dependencies.servicesReady));
   app.use('/api', async (_request, response, next) => {
-    if (await dependencies.database.isReady()) return next();
-    return response.status(503).json({ error: { code: 'SERVICE_UNAVAILABLE', message: 'Database is not ready', requestId: response.locals.requestId } });
+    if ((!dependencies.servicesReady || dependencies.servicesReady()) && await dependencies.database.isReady()) return next();
+    return response.status(503).json({ error: { code: 'SERVICE_UNAVAILABLE', message: 'Application services are not ready', requestId: response.locals.requestId } });
   });
   if (dependencies.auth) {
     const tokens = dependencies.auth.tokens ?? createTokenService(dependencies.config.accessTokenSecret, dependencies.config.refreshTokenPepper);
@@ -68,8 +66,7 @@ export function createApp(dependencies: AppDependencies): Express {
       webOrigin: dependencies.config.webOrigin,
     }));
     const resolveRole = async (id: string) => (await dependencies.auth!.repository.findUserById(id))?.role ?? null;
-    const configuredWatchlist = dependencies.monitoring?.watchlist;
-    const personalWatchlist = configuredWatchlist && 'symbols' in configuredWatchlist ? configuredWatchlist : undefined;
+    const personalWatchlist = dependencies.monitoring?.watchlist;
     const scope = personalWatchlist ?? emptyWatchlistScope;
     app.use('/api/admin/users', requireUser(tokens), createAdminUsersRouter(dependencies.auth.repository));
     if (dependencies.assetDirectory) app.use('/api/assets', requireUser(tokens), createAssetsRouter(dependencies.assetDirectory, scope));

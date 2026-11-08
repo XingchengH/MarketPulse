@@ -32,16 +32,18 @@ async function lock(key: string, session: ClientSession): Promise<void> {
 }
 
 export class PersonalWatchlistService {
+  constructor(private readonly onChange: () => void | Promise<void> = () => undefined) {}
+
   async initializeUser(inputUserId: string): Promise<void> {
     const userId = new Types.ObjectId(inputUserId);
     const key = userLock(String(userId));
     const starters = [...STARTER_SYMBOLS].sort();
     await ensureLocks([key, ...starters.map(symbolLock)]);
-    await UserWatchlistEntry.db.transaction(async session => {
+    const initialized = await UserWatchlistEntry.db.transaction(async session => {
       await lock(key, session);
       const user = await User.findById(userId).session(session).lean();
       if (!user) throw new Error('Watchlist user not found');
-      if (user.watchlistInitializedAt) return;
+      if (user.watchlistInitializedAt) return false;
       // Initialization participates in the same symbol locks as regular mutations,
       // preserving accurate first/final reference decisions across different users.
       for (const symbol of starters) await lock(symbolLock(symbol), session);
@@ -56,7 +58,9 @@ export class PersonalWatchlistService {
         );
       }
       await User.updateOne({ _id: userId }, { $set: { watchlistInitializedAt: new Date() } }, { session });
+      return true;
     });
+    if (initialized) await this.onChange();
   }
 
   list(userId: string): Promise<PersonalWatchlist> { return this.readList(new Types.ObjectId(userId)); }
@@ -94,8 +98,9 @@ export class PersonalWatchlistService {
     const userId = new Types.ObjectId(inputUserId);
     const key = userLock(String(userId));
     await ensureLocks([key, symbolLock(symbol)]);
+    let result: PersonalWatchlistMutationResult;
     try {
-      return await UserWatchlistEntry.db.transaction(async session => {
+      result = await UserWatchlistEntry.db.transaction(async session => {
         await lock(key, session);
         await lock(symbolLock(symbol), session);
         if (!await User.exists({ _id: userId }).session(session)) throw new Error('Watchlist user not found');
@@ -129,5 +134,7 @@ export class PersonalWatchlistService {
       if (type === 'add' && duplicateKey(error) && error.keyPattern?.userId && error.keyPattern?.symbol) return { status: 'duplicate' };
       throw error;
     }
+    if (result.status === 'updated') await this.onChange();
+    return result;
   }
 }

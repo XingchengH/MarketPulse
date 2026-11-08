@@ -131,4 +131,25 @@ describe('personal watchlist persistence', () => {
     expect(removals.map(result => result.status === 'updated' && result.unionChanged).sort()).toEqual([false, true]);
     expect(await service.union()).toEqual([]);
   });
+
+  it('refreshes subscriptions only after committed initialization and mutations, retaining database state on provider failure', async () => {
+    const user = await createUser();
+    const observed: string[][] = [];
+    const changed = vi.fn(async () => { observed.push(await service.union()); });
+    const notifying = new PersonalWatchlistService(changed);
+    await notifying.initializeUser(user);
+    expect(observed).toEqual([[...STARTER_SYMBOLS].sort()]);
+    await notifying.initializeUser(user);
+    expect(changed).toHaveBeenCalledOnce();
+    vi.spyOn(AuditEvent, 'create').mockRejectedValueOnce(new Error('audit failed') as never);
+    await expect(notifying.add(user, asset('F'), audit())).rejects.toThrow('audit failed');
+    expect(changed).toHaveBeenCalledOnce();
+    changed.mockRejectedValueOnce(new Error('provider failed'));
+    await expect(notifying.add(user, asset('F'), audit())).rejects.toThrow('provider failed');
+    expect(await service.has(user, 'F')).toBe(true);
+    await notifying.remove(user, 'F', audit());
+    expect(observed.at(-1)).toEqual([...STARTER_SYMBOLS].sort());
+    await notifying.remove(user, 'F', audit());
+    expect(changed).toHaveBeenCalledTimes(3);
+  });
 });
