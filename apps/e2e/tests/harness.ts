@@ -81,7 +81,7 @@ export async function startE2eHarness() {
   };
   const app = createApp({ config, database, providerState: () => provider.state(), auth: { provider: google, repository, tokens }, marketData, assetDirectory, assetLookup: assetDirectory, monitoring: { rules: ruleService, alerts: alertService, watchlist: watchlistService } });
   const httpServer: Server = createServer(app);
-  const realtime = createRealtimeServer(httpServer, { tokens, findCurrentUser: id => repository.findUserById(id) });
+  const realtime = createRealtimeServer(httpServer, { tokens, findCurrentUser: id => repository.findUserById(id), symbolsForUser: id => watchlistService.symbols(id) });
   const socketErrors: string[] = [];
   realtime.engine.on('connection_error', error => socketErrors.push(`${error.code}:${error.message}:${JSON.stringify(error.context)}`));
   publisher = new RealtimePublisher(realtime, { intervalMs: 10 });

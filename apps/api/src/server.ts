@@ -51,6 +51,7 @@ async function initialize(): Promise<void> {
     const tokens = createTokenService(config.accessTokenSecret, config.refreshTokenPepper);
     const aggregator = new MarketDataAggregator({ marketClock: { get: () => marketProvider.getMarketClock() } });
     let publisher: RealtimePublisher | undefined;
+    let realtime: ReturnType<typeof createRealtimeServer> | undefined;
     const alertService = new AlertService(() => publisher?.alertsChanged());
     const ruleService = new RuleService(() => publisher?.rulesChanged());
     let subscriptionsStarted = false;
@@ -58,7 +59,6 @@ async function initialize(): Promise<void> {
       try {
         await subscriptions.refresh();
         publisher?.providerState(providerState());
-        publisher?.overview({ provider: marketProvider.name, providerState: providerState(), symbols: subscriptions.symbols() });
       } catch {
         // Persistence already committed. Keep it authoritative and advertise the
         // degraded subscription state until a subsequent refresh succeeds.
@@ -66,8 +66,18 @@ async function initialize(): Promise<void> {
         console.error({ component: 'subscriptions' }, 'Market subscription refresh failed');
       }
     };
-    const watchlistService = new PersonalWatchlistService(async () => {
+    const watchlistService = new PersonalWatchlistService(async userId => {
       if (subscriptionsStarted) await refreshSubscriptions();
+      if (!realtime) return;
+      try {
+        await realtime.refreshUserRooms(userId);
+        publisher?.watchlistChanged(userId, await watchlistService.symbols(userId));
+      } catch {
+        // The transaction has committed. Fail closed until a fresh connection
+        // can reload membership, and keep the successful mutation authoritative.
+        realtime.in(`user:${userId}`).disconnectSockets(true);
+        console.error({ component: 'realtime' }, 'Personal watchlist room refresh failed');
+      }
     });
     const subscriptions = new SubscriptionCoordinator(watchlistService, marketProvider);
     const providerState = () => subscriptions.isHealthy() ? marketProvider.state() : 'unavailable' as const;
@@ -121,14 +131,14 @@ async function initialize(): Promise<void> {
     attempt.defer(() => monitoring.stop());
     const fullApplication = createApp({ config, database, providerState, servicesReady: () => servicesReady, auth: { provider, repository, tokens }, marketData, assetDirectory, assetLookup: assetDirectory, monitoring: { rules: ruleService, alerts: alertService, watchlist: watchlistService }, staticDir });
     // Socket.IO is attached only after every fallible bootstrap step above has succeeded.
-    const realtime = createRealtimeServer(server, { tokens, findCurrentUser: id => repository.findUserById(id), webOrigin: config.webOrigin });
+    realtime = createRealtimeServer(server, { tokens, findCurrentUser: id => repository.findUserById(id), symbolsForUser: id => watchlistService.symbols(id), webOrigin: config.webOrigin });
     publisher = new RealtimePublisher(realtime);
-    shutdown = createGracefulShutdown({ server, socket: { close: () => new Promise<void>(resolve => realtime.close(() => resolve())) }, provider: marketProvider, monitoring: { stop: () => { monitoring.stop(); publisher?.close(); } }, metrics: { flush: () => minuteWriter.stop() }, database });
+    shutdown = createGracefulShutdown({ server, socket: { close: () => new Promise<void>(resolve => realtime!.close(() => resolve())) }, provider: marketProvider, monitoring: { stop: () => { monitoring.stop(); publisher?.close(); } }, metrics: { flush: () => minuteWriter.stop() }, database });
     application = fullApplication;
     servicesReady = true;
     attempt.commit();
-    try { publisher.overview({ provider: marketProvider.name, providerState: providerState(), symbols: subscriptions.symbols() }); }
-    catch (error) { console.error({ component: 'realtime', error }, 'Initial overview publication failed'); }
+    try { publisher.providerState(providerState()); }
+    catch { console.error({ component: 'realtime' }, 'Initial provider state publication failed'); }
     console.log('Database connected; application services started');
   } catch (error) {
     servicesReady = false;

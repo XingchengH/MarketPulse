@@ -139,6 +139,7 @@ describe('personal watchlist persistence', () => {
     const notifying = new PersonalWatchlistService(changed);
     await notifying.initializeUser(user);
     expect(observed).toEqual([[...STARTER_SYMBOLS].sort()]);
+    expect(changed).toHaveBeenLastCalledWith(user);
     await notifying.initializeUser(user);
     expect(changed).toHaveBeenCalledOnce();
     vi.spyOn(AuditEvent, 'create').mockRejectedValueOnce(new Error('audit failed') as never);
@@ -149,6 +150,7 @@ describe('personal watchlist persistence', () => {
     expect(await service.has(user, 'F')).toBe(true);
     await notifying.remove(user, 'F', audit());
     expect(observed.at(-1)).toEqual([...STARTER_SYMBOLS].sort());
+    expect(changed).toHaveBeenLastCalledWith(user);
     await notifying.remove(user, 'F', audit());
     expect(changed).toHaveBeenCalledTimes(3);
   });

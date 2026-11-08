@@ -32,7 +32,7 @@ async function lock(key: string, session: ClientSession): Promise<void> {
 }
 
 export class PersonalWatchlistService {
-  constructor(private readonly onChange: () => void | Promise<void> = () => undefined) {}
+  constructor(private readonly onChange: (userId: string) => void | Promise<void> = () => undefined) {}
 
   async initializeUser(inputUserId: string): Promise<void> {
     const userId = new Types.ObjectId(inputUserId);
@@ -60,7 +60,7 @@ export class PersonalWatchlistService {
       await User.updateOne({ _id: userId }, { $set: { watchlistInitializedAt: new Date() } }, { session });
       return true;
     });
-    if (initialized) await this.onChange();
+    if (initialized) await this.onChange(String(userId));
   }
 
   list(userId: string): Promise<PersonalWatchlist> { return this.readList(new Types.ObjectId(userId)); }
@@ -134,7 +134,7 @@ export class PersonalWatchlistService {
       if (type === 'add' && duplicateKey(error) && error.keyPattern?.userId && error.keyPattern?.symbol) return { status: 'duplicate' };
       throw error;
     }
-    if (result.status === 'updated') await this.onChange();
+    if (result.status === 'updated') await this.onChange(String(userId));
     return result;
   }
 }
